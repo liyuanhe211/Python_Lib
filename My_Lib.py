@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 
-# A backward compatibility module for older programs
+# A backward compatibility module for older programs. Newer programs will only import some of the divided files.
 
 __author__ = 'LiYuanhe'
 
