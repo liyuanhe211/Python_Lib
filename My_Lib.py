@@ -21,7 +21,5 @@ from My_Lib_Science import *
 from My_Lib_System import *
 from My_Lib_Video import *
 
-pass
-
 if __name__ == "__main__":
     pass
