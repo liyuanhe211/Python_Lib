@@ -343,11 +343,6 @@ def get_ipv6_address_from_external():
     return requests.get("https://v6.ident.me/", verify=False).text
 
 
-def addToClipBoard(text):
-    import pyperclip
-    pyperclip.copy(text)
-
-
 def walk_all_files(parent=".", glob_filter="*.*", return_pathlib_obj=False):
     """
     os.walk() wrap, return list of str for the full path
@@ -864,7 +859,7 @@ def is_float(input_str):
     try:
         float(input_str)
         return True
-    except Exception:
+    except ValueError:
         return False
 
 
@@ -872,7 +867,7 @@ def int_able(input_str):
     try:
         int(input_str)
         return True
-    except Exception:
+    except ValueError:
         return False
 
 
