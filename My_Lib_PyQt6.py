@@ -4,10 +4,12 @@ __author__ = 'LiYuanhe'
 import os
 from PyQt6 import QtGui, QtCore, QtWidgets, uic
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
-    QFileDialog, QGraphicsPixmapItem, QGraphicsScene, \
-    QListView, QAbstractItemView, QTreeView, QWidget, QLayout
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent
-from PyQt6.QtCore import QPoint, QTimer, QMimeData
+    QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog,\
+    QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QTextEdit, QSpinBox, QAbstractSpinBox, \
+    QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
+    QTableWidgetItem
+from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon
+from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal
 from PyQt6.QtCore import Qt as QtCore_Qt
 
 QAspectRatioMode = QtCore_Qt.AspectRatioMode
@@ -18,6 +20,19 @@ QAlignCenter = QAlignmentFlag.AlignCenter
 
 QTransformationMode = QtCore_Qt.TransformationMode
 QSmoothTransformation = QTransformationMode.SmoothTransformation
+
+QMessageBox_Abort = QMessageBox.StandardButton.Abort
+QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
+QMessageBox_Close = QMessageBox.StandardButton.Close
+QMessageBox_Discard = QMessageBox.StandardButton.Discard
+QMessageBox_Ignore = QMessageBox.StandardButton.Ignore
+QMessageBox_No = QMessageBox.StandardButton.No
+QMessageBox_NoToAll = QMessageBox.StandardButton.NoToAll
+QMessageBox_Ok = QMessageBox.StandardButton.Ok
+QMessageBox_Save = QMessageBox.StandardButton.Save
+QMessageBox_SaveAll = QMessageBox.StandardButton.SaveAll
+QMessageBox_Yes = QMessageBox.StandardButton.Yes
+QMessageBox_YesToAll = QMessageBox.StandardButton.YesToAll
 
 import platform
 
@@ -32,6 +47,7 @@ import platform
 
 import sys
 import pathlib
+
 Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
 sys.path.append(Python_Lib_path)
 from My_Lib_Stock import *
@@ -148,7 +164,7 @@ def toggle_layout(layout, hide=-1, show=-1):
 
 
 class Qt_Widget_Common_Functions:
-    closing = QtCore.pyqtSignal()
+    closing = pyqtSignal()
 
     def center_the_widget(self, activate_window=True):
         frame_geometry = self.frameGeometry()
@@ -202,7 +218,7 @@ class Qt_Widget_Common_Functions:
 
 
 class Drag_Drop_TextEdit(QtWidgets.QTextEdit):
-    drop_accepted_signal = QtCore.pyqtSignal(list)
+    drop_accepted_signal = pyqtSignal(list)
 
     def __init__(self):
         super(self.__class__, self).__init__()
@@ -232,12 +248,12 @@ class Drag_Drop_TextEdit(QtWidgets.QTextEdit):
 
 
 def default_signal_for_connection(signal):
-    if isinstance(signal, QtWidgets.QPushButton) or isinstance(signal, QtWidgets.QToolButton) or isinstance(signal, QtWidgets.QRadioButton) or isinstance(
-            signal, QtWidgets.QCheckBox):
+    if isinstance(signal, QPushButton) or isinstance(signal, QToolButton) or isinstance(signal, QRadioButton) or \
+            isinstance(signal, QCheckBox):
         signal = signal.clicked
-    elif isinstance(signal, QtWidgets.QLineEdit):
+    elif isinstance(signal, QLineEdit):
         signal = signal.textChanged
-    elif isinstance(signal, QtWidgets.QDoubleSpinBox) or isinstance(signal, QtWidgets.QSpinBox):
+    elif isinstance(signal, QDoubleSpinBox) or isinstance(signal, QSpinBox):
         signal = signal.valueChanged
     return signal
 
@@ -324,8 +340,8 @@ def information_UI(message="", parent=None):
 def wait_confirmation_UI(parent=None, message=""):
     if not QApplication.instance():
         QApplication(sys.argv)
-    button = QmessageBox.warning(parent, message, message, QmessageBox.Ok | QmessageBox.Cancel)
-    if button == QmessageBox.Ok:
+    button = QmessageBox.warning(parent, message, message, QMessageBox_Ok | QMessageBox_Cancel)
+    if button == QMessageBox_Ok:
         return True
     else:
         return False
@@ -443,7 +459,7 @@ class Ui_Wait_Message_Form(object):
     def setupUi(self, Wait_Message_Form):
         Wait_Message_Form.setObjectName("Wait_Message_Form")
         Wait_Message_Form.resize(446, 82)
-        self.horizontalLayout = QtWidgets.QHBoxLayout(Wait_Message_Form)
+        self.horizontalLayout = QHBoxLayout(Wait_Message_Form)
         self.horizontalLayout.setObjectName("horizontalLayout")
         self.label = QtWidgets.QLabel(Wait_Message_Form)
         font = QtGui.QFont()
