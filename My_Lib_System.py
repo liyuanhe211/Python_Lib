@@ -27,5 +27,10 @@ def hide_cwd_window():
         os.system('taskkill /PID ' + str(pid) + ' /f')
 
 
+def addToClipBoard(text):
+    import pyperclip
+    pyperclip.copy(text)
+
+    
 if __name__ == '__main__':
     pass
