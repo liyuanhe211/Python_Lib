@@ -7,10 +7,12 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
     QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog,\
     QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QTextEdit, QSpinBox, QAbstractSpinBox, \
     QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
-    QTableWidgetItem
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon
-from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal
+    QTableWidgetItem, QFrame
+from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
+from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess
 from PyQt6.QtCore import Qt as QtCore_Qt
+Qt_Keys = QtCore_Qt.Key
+Qt_Colors = QtCore_Qt.GlobalColor
 
 QAspectRatioMode = QtCore_Qt.AspectRatioMode
 QKeepAspectRatio = QAspectRatioMode.KeepAspectRatio
@@ -20,6 +22,7 @@ QAlignCenter = QAlignmentFlag.AlignCenter
 
 QTransformationMode = QtCore_Qt.TransformationMode
 QSmoothTransformation = QTransformationMode.SmoothTransformation
+
 
 QMessageBox_Abort = QMessageBox.StandardButton.Abort
 QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
@@ -182,26 +185,36 @@ class Qt_Widget_Common_Functions:
 
     def open_config_file(self):
 
-        config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
+
+        config_file_json = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+        # for backward compatible
+        config_file_ini = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
+        if os.path.isfile(config_file_json) and os.path.isfile(config_file_ini):
+            # TODO (After verify): os.remove(config_file_ini)
+            pass
 
         config_file_failure = False
-        if not os.path.isfile(config_file):
-            config_file_failure = True
+        if os.path.isfile(config_file_json):
+            try:
+                self.config = json.loads(open(config_file_json).read())
+            except json.decoder.JSONDecodeError as e:
+                traceback.print_exc()
+                print(e)
+                config_file_failure = True
+        # for backward compatible
+        elif os.path.isfile(config_file_ini):
+            try:
+                self.config = eval(open(config_file_ini).read())
+            except Exception as e:
+                traceback.print_exc()
+                print(e)
+                config_file_failure = True
         else:
-            with open(config_file) as self.config_File:
-                try:
-                    self.config = eval(self.config_File.read())
-                except Exception as e:
-                    traceback.print_exc()
-                    print(e)
-                    config_file_failure = True
+            config_file_failure = True
 
         if config_file_failure:
-            with open(config_file, 'w') as self.config_File:
-                self.config_File.write('{}')
-
-        with open(config_file) as self.config_File:
-            self.config = eval(self.config_File.read())
+            open(config_file, 'w').write('{}')
+            self.config = {}
 
     def load_config(self, key, absence_return=""):
         if key in self.config:
@@ -212,9 +225,8 @@ class Qt_Widget_Common_Functions:
             return absence_return
 
     def save_config(self):
-        config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
-        with open(config_file, 'w') as self.config_File:
-            self.config_File.write(repr(self.config))
+        config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+        open(config_file, "w").write(json.dumps(self.config, indent=4))
 
 
 class Drag_Drop_TextEdit(QtWidgets.QTextEdit):
