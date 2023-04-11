@@ -1110,8 +1110,7 @@ def open_config_file():
     # for backward compatible
     config_file_ini = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
     if os.path.isfile(config_file_json) and os.path.isfile(config_file_ini):
-        # TODO (After verify): os.remove(config_file_ini)
-        pass
+        os.remove(config_file_ini)
 
     config_file_failure = False
     if os.path.isfile(config_file_json):
