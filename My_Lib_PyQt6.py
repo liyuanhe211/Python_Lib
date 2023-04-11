@@ -5,7 +5,8 @@ import os
 from PyQt6 import QtGui, QtCore, QtWidgets, uic
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
     QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog,\
-    QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QTextEdit, QSpinBox, QAbstractSpinBox, \
+    QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, \
+    QTextEdit, QSpinBox, QAbstractSpinBox, \
     QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
     QTableWidgetItem, QFrame
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
@@ -187,14 +188,11 @@ class Qt_Widget_Common_Functions:
             return super().closeEvent(event)
 
     def open_config_file(self):
-
-
         config_file_json = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
         # for backward compatible
         config_file_ini = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
         if os.path.isfile(config_file_json) and os.path.isfile(config_file_ini):
-            # TODO (After verify): os.remove(config_file_ini)
-            pass
+            os.remove(config_file_ini)
 
         config_file_failure = False
         if os.path.isfile(config_file_json):
