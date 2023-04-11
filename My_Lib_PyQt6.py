@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
     QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QTextEdit, QSpinBox, QAbstractSpinBox, \
     QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
     QTableWidgetItem
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon
+from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen
 from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal
 from PyQt6.QtCore import Qt as QtCore_Qt
 
@@ -33,6 +33,8 @@ QMessageBox_Save = QMessageBox.StandardButton.Save
 QMessageBox_SaveAll = QMessageBox.StandardButton.SaveAll
 QMessageBox_Yes = QMessageBox.StandardButton.Yes
 QMessageBox_YesToAll = QMessageBox.StandardButton.YesToAll
+
+QTextCursor_End = QTextCursor.MoveOperation.End
 
 import platform
 
@@ -98,6 +100,7 @@ from My_Lib_Stock import *
 #         return Windows_DPI_ratio,PyQt_scaling_ratio
 #
 #
+
 def get_matplotlib_DPI_setting(Windows_DPI_ratio):
     matplotlib_DPI_setting = 60
     if platform.system() == 'Windows':
