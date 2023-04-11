@@ -6,9 +6,13 @@ import os
 import math
 import copy
 import shutil
+import pickle
 import re
 import time
 import datetime
+import json
+from datetime import datetime
+from datetime import timedelta
 import random
 import subprocess
 from collections import OrderedDict
@@ -1102,32 +1106,41 @@ def mytimeout(timeout):
 
 
 def open_config_file():
-    config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
+    config_file_json = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+    # for backward compatible
+    config_file_ini = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
+    if os.path.isfile(config_file_json) and os.path.isfile(config_file_ini):
+        os.remove(config_file_ini)
 
     config_file_failure = False
-    if not os.path.isfile(config_file):
-        config_file_failure = True
+    if os.path.isfile(config_file_json):
+        try:
+            config = json.loads(open(config_file_json).read())
+        except json.decoder.JSONDecodeError as e:
+            traceback.print_exc()
+            print(e)
+            config_file_failure = True
+    # for backward compatible
+    elif os.path.isfile(config_file_ini):
+        try:
+            config = eval(open(config_file_ini).read())
+        except Exception as e:
+            traceback.print_exc()
+            print(e)
+            config_file_failure = True
     else:
-        with open(config_file) as config_file:
-            try:
-                eval(config_file.read())
-            except Exception:
-                config_file_failure = True
+        config_file_failure = True
 
     if config_file_failure:
-        with open(config_file, 'w') as config_file:
-            config_file.write('{}')
-
-    with open(config_file) as config_file:
-        config = eval(config_file.read())
+        open(config_file, 'w').write('{}')
+        config = {}
 
     return config
 
 
 def save_config(config):
-    config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
-    with open(config_file, 'w') as config_File:
-        config_File.write(repr(config))
+    config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+    open(config_file, "w").write(json.dumps(config, indent=4))
 
 
 # def get_response_header_using_cookie(url):

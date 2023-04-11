@@ -352,8 +352,7 @@ def read(file_name, file_format=None):
                 molecules.append(Molecule(atomic_numbers, positions))
         return molecules
     else:
-        if (file_format is 'xyz' or
-                (file_format is None and file_name.endswith('.xyz'))):
+        if (file_format == 'xyz' or (file_format is None and file_name.endswith('.xyz'))):
             with open(file_name, 'r') as input_file:
                 file_content = input_file.readlines()
             molecules = []

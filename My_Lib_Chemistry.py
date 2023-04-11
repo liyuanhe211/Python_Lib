@@ -125,6 +125,7 @@ def get_bonds(filename, neighbor_list=False, add_bond="", bond_radii_factor=1.3)
              52: [51], 53: [47, 51, 54, 55], 54: [53], 55: [53, 56, 60, 61], 56: [55, 57, 58, 59],
              57: [56], 58: [56], 59: [56], 60: [55], 61: [42, 55, 62], 62: [61]}
     """
+    from .mogli import mogli
 
     # convert "1-2,1-5" to [(1,2),(1,5)]
     if not add_bond:
@@ -140,8 +141,6 @@ def get_bonds(filename, neighbor_list=False, add_bond="", bond_radii_factor=1.3)
 
         add_bond = new_add_bond
 
-    from mogli.mogli import mogli
-    import time
     molecules = mogli.read(filename)
     retry_attempts = 0
     while not molecules:
