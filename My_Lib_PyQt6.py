@@ -198,6 +198,7 @@ class Qt_Widget_Common_Functions:
             self.save_config()
             return absence_return
 
+    # backward compatible
     def load_config(self, key, absence_return=""):
         self.get_config(key, absence_return)
 
