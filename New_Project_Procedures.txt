@@ -1,0 +1,5 @@
+cd to project directory
+git init
+git submodule add https://github.com/liyuanhe211/Python_Lib.git
+mkdir .venv
+pipenv install 
