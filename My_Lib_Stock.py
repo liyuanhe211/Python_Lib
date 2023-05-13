@@ -1140,6 +1140,7 @@ def open_config_file():
 
 def save_config(config):
     config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+#    print(config_file)
     open(config_file, "w").write(json.dumps(config, indent=4))
 
 
