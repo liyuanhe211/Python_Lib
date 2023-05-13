@@ -191,16 +191,11 @@ class Qt_Widget_Common_Functions:
         self.config = open_config_file()
 
     def get_config(self, key, absence_return=""):
-        if key in self.config:
-            return self.config[key]
-        else:
-            self.config[key] = absence_return
-            self.save_config()
-            return absence_return
+        return get_config(self.config,key,absence_return)
 
     # backward compatible
     def load_config(self, key, absence_return=""):
-        self.get_config(key, absence_return)
+        return self.get_config(key, absence_return)
 
     def save_config(self):
         save_config(self.config)

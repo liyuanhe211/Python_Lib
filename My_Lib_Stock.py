@@ -1142,6 +1142,15 @@ def open_config_file():
     return config
 
 
+def get_config(config, key, absence_return=""):
+    if key in config:
+        return config[key]
+    else:
+        config[key] = absence_return
+        self.save_config()
+        return absence_return
+
+
 def save_config(config):
     config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
 #    print(config_file)
