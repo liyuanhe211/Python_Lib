@@ -363,21 +363,25 @@ def walk_all_files(parent=".", glob_filter="*.*", return_pathlib_obj=False):
     return files
 
 
-def list_current_folder(parent=".", file_filter="*", return_pathlib_obj=False):
+def list_folder_content(parent=".", filter="*", return_pathlib_obj=False):
     """
     return list of str for the full path of both files and folders
     :param parent:
-    :param file_filter:
+    :param filter:
     :param return_pathlib_obj: Whether to return a Path object, if False, return str
     """
     import pathlib
-    parent_folder = pathlib.Path(parent)
+    #print(parent)
+    parent_pathlib_object = pathlib.Path(parent)
     if return_pathlib_obj:
-        files = [x.resolve() for x in parent_folder.glob(file_filter)]
+        files = [x.resolve() for x in parent_pathlib_object.glob(filter)]
     else:
-        files = [str(x.resolve()) for x in parent_folder.glob(file_filter)]
-    # print(files)
+        files = [str(x.resolve()) for x in parent_pathlib_object.glob(filter)]
+    #print(files)
     return files
+
+
+list_current_folder = list_folder_content
 
 
 def file_is_busy(filepath):
@@ -863,7 +867,7 @@ def is_float(input_str):
     try:
         float(input_str)
         return True
-    except ValueError:
+    except (ValueError,TypeError):
         return False
 
 
@@ -871,7 +875,7 @@ def int_able(input_str):
     try:
         int(input_str)
         return True
-    except ValueError:
+    except (ValueError,TypeError):
         return False
 
 
@@ -1140,6 +1144,7 @@ def open_config_file():
 
 def save_config(config):
     config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+#    print(config_file)
     open(config_file, "w").write(json.dumps(config, indent=4))
 
 
