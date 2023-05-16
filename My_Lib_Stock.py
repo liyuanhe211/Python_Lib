@@ -17,7 +17,7 @@ import random
 import subprocess
 from collections import OrderedDict
 import traceback
-from typing import Optional, Union, Sequence, Tuple, List
+from typing import Optional, Union, Sequence, Tuple, List, Callable
 
 # ALL Numbers in SI if not mentioned
 R = 8.3144648
@@ -1188,3 +1188,7 @@ def read_txt_table(file, separater='\t'):
 
 def read_txt_and_transpose(file, separater='\t'):
     return transpose_2d_list(read_txt_table(file, separater=separater))
+
+
+def raise_not_implemented_exception():
+    raise Exception("Not Implemented")
