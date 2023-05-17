@@ -365,7 +365,7 @@ def walk_all_files(parent=".", glob_filter="*.*", return_pathlib_obj=False):
 
 def list_current_folder(parent=".", file_filter="*", return_pathlib_obj=False):
     """
-    return list of str for the full path
+    return list of str for the full path of both files and folders
     :param parent:
     :param file_filter:
     :param return_pathlib_obj: Whether to return a Path object, if False, return str
