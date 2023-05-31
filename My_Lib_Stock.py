@@ -11,13 +11,14 @@ import re
 import time
 import datetime
 import json
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 import random
 import subprocess
 from collections import OrderedDict
 import traceback
-from typing import Optional, Union, Sequence, Tuple, List, Callable
+from typing import Optional, Union, Sequence, Tuple, List, Callable, Literal
+import importlib
+import importlib.util
 
 # ALL Numbers in SI if not mentioned
 R = 8.3144648
@@ -305,7 +306,12 @@ def get_ipv6_public_addresses_on_windows():
     :return: a list of ipv6 addresses
     """
     # https://stackoverflow.com/questions/53497/regular-expression-that-matches-valid-ipv6-addresses
-    ipv6_address_regexp = r"(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))"
+    ipv6_address_regexp = r'(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,' \
+                          r'4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,' \
+                          r'4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,' \
+                          r'7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,' \
+                          r'3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,' \
+                          r'3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])) '
 
     ret = []
     import subprocess
@@ -327,7 +333,12 @@ def get_ipv6_public_addresses_on_linux():
     :return: a list of ipv6 addresses
     """
     # https://stackoverflow.com/questions/53497/regular-expression-that-matches-valid-ipv6-addresses
-    ipv6_address_regexp = r"(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))"
+    ipv6_address_regexp = r'(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,' \
+                          r'4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,' \
+                          r'4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,' \
+                          r'7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,' \
+                          r'3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,' \
+                          r'3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])) '
 
     ret = []
     import subprocess
@@ -371,13 +382,13 @@ def list_folder_content(parent=".", filter="*", return_pathlib_obj=False):
     :param return_pathlib_obj: Whether to return a Path object, if False, return str
     """
     import pathlib
-    #print(parent)
+    # print(parent)
     parent_pathlib_object = pathlib.Path(parent)
     if return_pathlib_obj:
         files = [x.resolve() for x in parent_pathlib_object.glob(filter)]
     else:
         files = [str(x.resolve()) for x in parent_pathlib_object.glob(filter)]
-    #print(files)
+    # print(files)
     return files
 
 
@@ -867,7 +878,7 @@ def is_float(input_str):
     try:
         float(input_str)
         return True
-    except (ValueError,TypeError):
+    except (ValueError, TypeError):
         return False
 
 
@@ -875,7 +886,7 @@ def int_able(input_str):
     try:
         int(input_str)
         return True
-    except (ValueError,TypeError):
+    except (ValueError, TypeError):
         return False
 
 
@@ -981,14 +992,31 @@ def find_within_bracket(input_str, get_last_one=False):
     return ret
 
 
-def strip_sequence_from_str(input_string: str, to_strip):
+def left_strip_sequence_from_str(input_string: str, to_match):
     """
     "abcabca","ab" --> “cabca"
-    "abcabca","abc" --> “a"
+    "abcabcd","abc" --> “d"
     """
 
-    while input_string.startswith(to_strip):
-        input_string = input_string[len(to_strip):]
+    while input_string.startswith(to_match):
+        input_string = input_string[len(to_match):]
+
+    return input_string
+
+
+strip_sequence_from_str = left_strip_sequence_from_str
+
+
+def right_strip_sequence_from_str(input_string: str, to_match):
+    """
+    Same as left_strip_sequence_from_str only from the right
+    :param input_string:
+    :param to_match:
+    :return:
+    """
+
+    while input_string.endswith(to_match):
+        input_string = input_string[:-len(to_match)]
 
     return input_string
 
@@ -1153,7 +1181,7 @@ def get_config(config, key, absence_return=""):
 
 def save_config(config):
     config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
-#    print(config_file)
+    #    print(config_file)
     open(config_file, "w").write(json.dumps(config, indent=4))
 
 
@@ -1192,3 +1220,23 @@ def read_txt_and_transpose(file, separater='\t'):
 
 def raise_not_implemented_exception():
     raise Exception("Not Implemented")
+
+
+def import_from_absolute_path(path_to_py):
+    """
+    Import a python file with its absolute path, and return the module.
+    For example:
+
+    my_module = import_from_absolute_path(r"C:/my_program/script.py")
+    my_module.my_function()
+
+    :param path_to_py:
+    :return:
+    """
+    abs_path = os.path.abspath(path_to_py)
+    module_name = filename_class(abs_path).name_stem
+    spec = importlib.util.spec_from_file_location(module_name, path_to_py)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
