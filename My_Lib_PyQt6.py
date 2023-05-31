@@ -4,8 +4,8 @@ __author__ = 'LiYuanhe'
 import os
 from PyQt6 import QtGui, QtCore, QtWidgets, uic
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
-    QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog,\
-    QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, \
+    QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog, \
+    QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout, \
     QTextEdit, QSpinBox, QAbstractSpinBox, \
     QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
     QTableWidgetItem, QFrame
@@ -170,6 +170,20 @@ def toggle_layout(layout, hide=-1, show=-1):
                 layout.itemAt(i).widget().show()
 
 
+def set_slider_to_line(textedit, line_number):
+    scroll_bar = textedit.verticalScrollBar()
+    line_height = textedit.fontMetrics().lineSpacing()
+    position = line_number * line_height
+    position = max(scroll_bar.minimum(), position)
+    position = min(scroll_bar.maximum(), position)
+    scroll_bar.setValue(position)
+
+
+def vertical_scroll_to_end(textEdit):
+    scroll_bar = textEdit.verticalScrollBar()
+    scroll_bar.setSliderPosition(scroll_bar.maximum())
+
+
 class Qt_Widget_Common_Functions:
     closing = pyqtSignal()
 
@@ -191,7 +205,7 @@ class Qt_Widget_Common_Functions:
         self.config = open_config_file()
 
     def get_config(self, key, absence_return=""):
-        return get_config(self.config,key,absence_return)
+        return get_config(self.config, key, absence_return)
 
     # backward compatible
     def load_config(self, key, absence_return=""):
@@ -331,7 +345,7 @@ def wait_confirmation_UI(parent=None, message=""):
         return False
 
 
-def get_open_file_UI(parent, start_path: str, allowed_appendix, title="No Title", tags=(), single=False):
+def get_open_file_UI(parent, start_path: str, allowed_appendix, title="No Title", tags=(), single=False, save=False):
     """
 
     :param parent
@@ -341,6 +355,7 @@ def get_open_file_UI(parent, start_path: str, allowed_appendix, title="No Title"
     :param title:
     :param tags:
     :param single:
+    :param save: use the save file UI
     :return: a list of files if not single, a single filepath if single
     """
 
@@ -354,16 +369,20 @@ def get_open_file_UI(parent, start_path: str, allowed_appendix, title="No Title"
 
     filename_filter_string = build_fileDialog_filter(allowed_appendix, tags)
 
-    if single:
-        ret = QFileDialog.getOpenFileName(parent, title, start_path, filename_filter_string)
-        if ret:  # 上面返回 ('E:/My_Program/Python_Lib/elements_dict.txt', '(*.txt)')
-            ret = ret[0]
+    if save:
+        ret = QFileDialog.getSaveFileName(parent, title, start_path, filename_filter_string)
     else:
-        ret = QFileDialog.getOpenFileNames(parent, title, start_path, filename_filter_string)
-        if ret:  # 上面返回 (['E:/My_Program/Python_Lib/elements_dict.txt'], '(*.txt)')
-            ret = ret[0]
+        if single:
+            ret = QFileDialog.getOpenFileName(parent, title, start_path, filename_filter_string)
+        else:
+            ret = QFileDialog.getOpenFileNames(parent, title, start_path, filename_filter_string)
 
-    return ret
+    if ret:  # 上面返回 (['E:/My_Program/Python_Lib/elements_dict.txt'], '(*.txt)')
+        return ret[0]
+
+
+def get_save_file_UI(parent, start_path: str, allowed_appendix, title="No Title", tags=()):
+    return get_open_file_UI(parent, start_path, allowed_appendix, title=title, tags=tags)
 
 
 def show_pixmap(image_filename, graphicsView_object):
@@ -408,6 +427,12 @@ def add_list_to_layout(layout, list_of_item):
 
 
 def pyqt_ui_compile(filename):
+    """
+
+    :param filename:
+    :return:
+    """
+
     # 允许将.ui文件放在命名为UI的文件夹下，或程序目录下，但只输入文件名，而不必输入“UI/”
 
     if filename[:3] in ['UI\\', 'UI/']:
