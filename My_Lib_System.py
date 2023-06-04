@@ -31,6 +31,24 @@ def addToClipBoard(text):
     import pyperclip
     pyperclip.copy(text)
 
+
+def process_is_CPU_idle(pid,interval=1):
+    """
+
+    :param pid:
+    :param interval: sampling time, seconds
+    :return: True if is idle, False if not, None if pid not exist
+    """
+    import psutil
+    try:
+        process = psutil.Process(pid)
+        cpu_percent = process.cpu_percent(interval=interval)
+        if cpu_percent == 0:
+            return True
+        return False
+    except psutil.NoSuchProcess:
+        return None
+
     
 if __name__ == '__main__':
     pass
