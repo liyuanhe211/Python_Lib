@@ -15,9 +15,12 @@ from datetime import datetime
 from datetime import timedelta
 import random
 import subprocess
+import collections
 from collections import OrderedDict
 import traceback
-from typing import Optional, Union, Sequence, Tuple, List, Callable
+import pathlib
+from typing import Optional, Union, Sequence, Tuple, List, Callable, TypeVar
+
 
 # ALL Numbers in SI if not mentioned
 R = 8.3144648
@@ -1110,9 +1113,19 @@ def mytimeout(timeout):
 
 
 def open_config_file():
-    config_file_json = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
+    """
+    Assuming this folder structure:
+    Project_folder
+        - Python_Lib
+            - My_Lib_Stock.py
+        - Config.json
+    Returns:
+
+    """
+    config_folder = str(pathlib.Path(__file__).parent.parent.resolve())
+    config_file_json = os.path.join(config_folder, 'Config.json')
     # for backward compatible
-    config_file_ini = os.path.join(filename_class(sys.argv[0]).path, 'Config.ini')
+    config_file_ini = os.path.join(config_folder, 'Config.ini')
     if os.path.isfile(config_file_json) and os.path.isfile(config_file_ini):
         os.remove(config_file_ini)
 
@@ -1136,7 +1149,7 @@ def open_config_file():
         config_file_failure = True
 
     if config_file_failure:
-        open(config_file, 'w').write('{}')
+        open(config_file_json, 'w').write('{}')
         config = {}
 
     return config
