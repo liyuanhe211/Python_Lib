@@ -11,9 +11,9 @@ import git
 from My_Lib_Stock import *
 
 if __name__ == '__main__':
-    Base_folder = r"E:\My_Program"
-    Base_repo = r"E:\My_Program\Python_Lib"
-    for project in list_current_folder(Base_folder):
+    MAIN_FOLDER = r"E:\My_Program"
+    BASE_LIB = r"E:\My_Program\Python_Lib"
+    for project in list_current_folder(MAIN_FOLDER):
         sub_repo_folder = os.path.join(project,'Python_Lib')
         if os.path.isdir(sub_repo_folder):
             os.chdir(sub_repo_folder)
