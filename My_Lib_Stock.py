@@ -1037,7 +1037,7 @@ def get_config(config, key, absence_return=""):
         return config[key]
     else:
         config[key] = absence_return
-        self.save_config()
+        save_config(config)
         return absence_return
 
 
