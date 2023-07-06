@@ -169,6 +169,12 @@ def toggle_layout(layout, hide=-1, show=-1):
             if layout.itemAt(i).widget():
                 layout.itemAt(i).widget().show()
 
+def clear_layout(layout):
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget:
+            widget.deleteLater()
 
 def set_slider_to_line(textedit, line_number):
     scroll_bar = textedit.verticalScrollBar()
@@ -413,9 +419,10 @@ def exit_UI():
 
 
 def clear_layout(layout):
-    while not layout.isEmpty():
-        layout.itemAt(0).widget().deleteLater()
-        layout.removeItem(layout.itemAt(0))
+    while layout.count():
+        child = layout.takeAt(0)
+        if child.widget():
+            child.widget().deleteLater()
 
 
 def add_list_to_layout(layout, list_of_item):
