@@ -13,7 +13,10 @@ from My_Lib_Stock import *
 if __name__ == '__main__':
     MAIN_FOLDER = r"E:\My_Program"
     BASE_LIB = r"E:\My_Program\Python_Lib"
+    exclude_folders = ["E:\My_Program\Gaussian_Toolkit_Backup"]
     for project in list_current_folder(MAIN_FOLDER):
+        if project in exclude_folders:
+            continue
         sub_repo_folder = os.path.join(project,'Python_Lib')
         if os.path.isdir(sub_repo_folder):
             os.chdir(sub_repo_folder)
