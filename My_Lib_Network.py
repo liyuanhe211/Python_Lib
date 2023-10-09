@@ -52,7 +52,7 @@ def download_sftp_file(ssh_account: SSH_Account, remote_filepath, local_filepath
 
     ssh_for_homedir = paramiko.SSHClient()
     ssh_for_homedir.load_system_host_keys()
-    ssh_for_homedir.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh_for_homedir.set_missing_host_key_policy(paramiko.client.RejectPolicy)
 
     ssh_for_homedir.connect(ssh_account.ip, ssh_account.port, username=ssh_account.username, password=ssh_account.password)
 
