@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
     QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout, \
     QTextEdit, QSpinBox, QAbstractSpinBox, \
     QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
-    QTableWidgetItem, QFrame
+    QTableWidgetItem, QFrame, QSpacerItem, QSizePolicy, QTableWidget
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
 from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess
 from PyQt6.QtCore import Qt as QtCore_Qt
