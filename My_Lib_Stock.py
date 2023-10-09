@@ -768,6 +768,25 @@ def cas_wrapper(input_str: str, strict=False, correction=False):
 def transpose_2d_list(list_input):
     return list(map(list, zip(*list_input)))
 
+def moving_averages(lst, n):
+    """
+
+    :param lst: [[x1,y1],[x2,y2],...]
+    :param n: up-rounded to the nearest odd number
+    :return:
+    """
+    if n%2==0:
+        n += 1
+    n = round((n-1)/2)
+    Xs,Ys = transpose_2d_list(lst)
+    result = []
+    for i in range(len(Ys)):
+        start = max(0, i - n)
+        end = min(len(lst), i + n + 1)
+        avg = average(Ys[start:end])
+        result.append([Xs[i],avg])
+    return result
+
 
 def is_float(input_str):
     # 确定字符串可以转换为float

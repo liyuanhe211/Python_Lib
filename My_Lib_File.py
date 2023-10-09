@@ -34,7 +34,7 @@ class filename_class:
 
 def filename_parent(file_path):
     """
-    Return "" if there is no parent
+    Return "" if there is no parent, not including trailing slash
     """
     path = pathlib.Path(file_path)
     if len(path.parts)==1:
