@@ -91,6 +91,7 @@ def replace_last_append(file_path, new_append: str):
     new_append = "." + new_append if not new_append.startswith(".") else new_append
     return str(path.with_suffix(new_append))
 
+filename_replace_last_append = replace_last_append
 
 def insert_append(file_path, new_append):
     """

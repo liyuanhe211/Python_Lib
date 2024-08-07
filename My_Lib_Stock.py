@@ -412,7 +412,13 @@ def split_list_by_item(input_list: list, separator, lower_case_match=False, incl
     return split_list(input_list, separator, lower_case_match, include_separator, include_empty)
 
 
-def split_list(input_list: list, separator, lower_case_match=False, include_separator=False, include_separator_after=False, include_empty=False):
+def split_list(input_list: list,
+               separator=None,
+               lower_case_match=False,
+               include_separator=False,
+               include_separator_after=False,
+               include_empty=False,
+               separator_with_context = None):
     """
 
     :param input_list:
@@ -422,18 +428,23 @@ def split_list(input_list: list, separator, lower_case_match=False, include_sepa
     :param include_separator:
     :param include_separator_after:
     :param include_empty:
+    :param a function like separator_with_context(input_list, i) with i being the index return a bool
     :return:
     """
     ret = []
     temp = []
 
+    if separator is None and separator_with_context is None:
+        raise Exception("You need to either designate separator or separator_with_context")
+
     if include_separator or include_separator_after:
         assert not (include_separator and include_separator_after), 'include_separator and include_separator_after can not be True at the same time'
 
-    for item in input_list:
-
+    for count,item in enumerate(input_list):
         split_here_bool = False
-        if callable(separator):
+        if callable(separator_with_context):
+            split_here_bool = separator_with_context(input_list,count)
+        elif callable(separator):
             split_here_bool = separator(item)
         elif isinstance(item, str) and item == separator:
             split_here_bool = True
@@ -519,13 +530,18 @@ def get_appropriate_ticks(ranges, num_tick_limit=(4, 6), accept_closest_out_of_r
     return [optimal_start_point, optimal_end_point, optimal_distance]
 
 
-def get_input_with_while_cycle(break_condition=lambda x: not x.strip(), input_prompt="", strip_quote=True, backup_file=None):
+def get_input_with_while_cycle(break_condition=lambda x: not x.strip(),
+                               input_prompt="",
+                               strip_quote=True,
+                               backup_file=None,
+                               context_break_condition = None) -> list:
     """
     get multiple line of input, terminate with a condition, return the accepted lines
     :param break_condition: give a function, when it is met, the while loop is terminated.
     :param input_prompt: will print this every line
     :param strip_quote:
     :param backup_file: a file-like object (created by "open()") which will store the inputs for backup
+    :param context_break_condition: a function accepting two parameters, the first is the lines already get, the second is the current input_line.
     :return: list of accepted lines
     """
 
@@ -537,10 +553,12 @@ def get_input_with_while_cycle(break_condition=lambda x: not x.strip(), input_pr
             backup_file.write('\n')
         if strip_quote:
             input_line = input_line.strip().strip('"')
-        if break_condition(input_line):
+        if context_break_condition is not None:
+            if context_break_condition(ret,input_line):
+                break
+        elif break_condition(input_line):
             break
-        else:
-            ret.append(input_line)
+        ret.append(input_line)
     return ret
 
 
