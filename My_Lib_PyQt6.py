@@ -129,8 +129,8 @@ def get_open_directories():
         QApplication(sys.argv)
 
     file_dialog = QFileDialog()
-    file_dialog.setFileMode(QFileDialog.DirectoryOnly)
-    file_dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    file_dialog.setFileMode(QFileDialog.FileMode.Directory)
+    file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     file_view = file_dialog.findChild(QListView, 'listView')
 
     # to make it possible to select multiple directories:
