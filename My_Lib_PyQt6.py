@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
 from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess
 from PyQt6.QtCore import Qt as QtCore_Qt
+from PyQt6.QtCore import QEvent
 
 Qt_Keys = QtCore_Qt.Key
 Qt_Colors = QtCore_Qt.GlobalColor
@@ -129,8 +130,8 @@ def get_open_directories():
         QApplication(sys.argv)
 
     file_dialog = QFileDialog()
-    file_dialog.setFileMode(QFileDialog.DirectoryOnly)
-    file_dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    file_dialog.setFileMode(QFileDialog.FileMode.Directory)
+    file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     file_view = file_dialog.findChild(QListView, 'listView')
 
     # to make it possible to select multiple directories:
