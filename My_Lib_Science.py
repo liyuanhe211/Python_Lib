@@ -34,12 +34,12 @@ def interpolation_with_grouping(Xs, Ys, kind, smoothing=None):
 
     # if kind in ['zero', 'slinear', 'quadratic', 'cubic', 'linear', 'nearest', 'nearest-up', 'previous', 'next']:
     if smoothing is None:
-        print('using if')
+        # print('using if')
         # Use interp1d for these specific kinds
         interp_function = interp1d(interp1d_X, interp1d_Y, kind=kind)
         return lambda x: interp_function(x)
     else:
-        print("using else")
+        # print("using else")
         # Use splrep and splev for B-spline or custom spline types
         tck = splrep(interp1d_X, interp1d_Y, k=kind_to_degree(kind), s=smoothing)
         return lambda x: splev(x, tck)
