@@ -660,9 +660,9 @@ def optimization_timer(position_label=""):
         print("————————————", position_label, int(delta * 1000))
 
 
-def readable_timestamp(timestamp=0):
+def readable_timestamp(timestamp=None):
     from datetime import datetime
-    if not timestamp:
+    if timestamp is None:
         return datetime.now().strftime("%Y%m%d%H%M%S")
     else:
         return datetime.fromtimestamp(timestamp).strftime("%Y%m%d%H%M%S")
