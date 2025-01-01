@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
 from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess
 from PyQt6.QtCore import Qt as QtCore_Qt
+from PyQt6.QtCore import QEvent
 
 Qt_Keys = QtCore_Qt.Key
 Qt_Colors = QtCore_Qt.GlobalColor
