@@ -341,8 +341,6 @@ def get_ipv6_address_from_external():
     return requests.get("https://v6.ident.me/", verify=False).text
 
 
-
-
 def remove_key_from_dict(input_dict, key):
     if key in input_dict:
         input_dict.pop(key)
@@ -418,7 +416,7 @@ def split_list(input_list: list,
                include_separator=False,
                include_separator_after=False,
                include_empty=False,
-               separator_with_context = None):
+               separator_with_context=None):
     """
 
     :param input_list:
@@ -440,10 +438,10 @@ def split_list(input_list: list,
     if include_separator or include_separator_after:
         assert not (include_separator and include_separator_after), 'include_separator and include_separator_after can not be True at the same time'
 
-    for count,item in enumerate(input_list):
+    for count, item in enumerate(input_list):
         split_here_bool = False
         if callable(separator_with_context):
-            split_here_bool = separator_with_context(input_list,count)
+            split_here_bool = separator_with_context(input_list, count)
         elif callable(separator):
             split_here_bool = separator(item)
         elif isinstance(item, str) and item == separator:
@@ -534,7 +532,7 @@ def get_input_with_while_cycle(break_condition=lambda x: not x.strip(),
                                input_prompt="",
                                strip_quote=True,
                                backup_file=None,
-                               context_break_condition = None) -> list:
+                               context_break_condition=None) -> list:
     """
     get multiple line of input, terminate with a condition, return the accepted lines
     :param break_condition: give a function, when it is met, the while loop is terminated.
@@ -554,7 +552,7 @@ def get_input_with_while_cycle(break_condition=lambda x: not x.strip(),
         if strip_quote:
             input_line = input_line.strip().strip('"')
         if context_break_condition is not None:
-            if context_break_condition(ret,input_line):
+            if context_break_condition(ret, input_line):
                 break
         elif break_condition(input_line):
             break
@@ -684,7 +682,7 @@ def remove_duplicate(input_list: list, access_function=None):
     return ret
 
 
-def remove_blank(input_list: list,is_valid_function = None):
+def remove_blank(input_list: list, is_valid_function=None):
     if is_valid_function is None:
         return [x for x in input_list if x]
     else:
@@ -788,6 +786,7 @@ def cas_wrapper(input_str: str, strict=False, correction=False):
 
 def transpose_2d_list(list_input):
     return list(map(list, zip(*list_input)))
+
 
 # def moving_averages(lst, n):
 #     """
@@ -912,11 +911,11 @@ def right_strip_sequence_from_str(input_string: str, to_match):
     return input_string
 
 
-def phrase_range_selection(input_str, by_index=True):
+def parse_range_selection(input_str, decrease_by_1=True):
     """
-    Input a range like 1,5,7-9; output a list by index [0,4,6,7,8]; if not index [1,5,7,8,9]
+    Input a range like 1,5,7-9; output a list. If by index [0,4,6,7,8]; if not index [1,5,7,8,9]
     :param input_str:
-    :param by_index: the index will be 1 less than what's inputted
+    :param decrease_by_1: if true, the index will be decreased by 1 than what's inputted
     :return:
     """
 
@@ -935,11 +934,14 @@ def phrase_range_selection(input_str, by_index=True):
 
             start, end = choice.split('-')
             choices += [str(x) for x in range(int(start), int(end) + 1)]
-    if by_index:
+    if decrease_by_1:
         choices = sorted(list(set([int(x) - 1 for x in choices if '-' not in x])))
     else:
         choices = sorted(list(set([int(x) for x in choices if '-' not in x])))
     return choices
+
+
+phrase_range_selection = parse_range_selection
 
 
 def filename_from_url(url):
@@ -966,14 +968,21 @@ elements_dict = {0: "X", 89: 'Ac', 47: 'Ag', 13: 'Al', 95: 'Am', 18: 'Ar', 33: '
 
 num_to_element_dict = elements_dict
 element_to_num_dict = {}
-for key,value in elements_dict.items():
-    element_to_num_dict[value]=key
-    element_to_num_dict[value.lower()]=key
-    element_to_num_dict[value.upper()]=key
+for key, value in elements_dict.items():
+    element_to_num_dict[value] = key
+    element_to_num_dict[value.lower()] = key
+    element_to_num_dict[value.upper()] = key
 
 
 def chr_is_chinese(char):
-    return 0x4e00 <= ord(char) <= 0x9fa5
+    char = ord(char)
+    return (
+        0x4e00 <= char <= 0x9fff or  # CJK Unified Ideographs (most common Chinese characters)
+        0x3000 <= char <= 0x303f or  # CJK Symbols and Punctuation (。！？「」、 etc.)
+        0xff00 <= char <= 0xffef or  # Fullwidth forms (，．！＠＃ etc.)
+        0x2e80 <= char <= 0x2eff or  # CJK Radicals Supplement
+        0x3400 <= char <= 0x4dbf     # CJK Unified Ideographs Extension A
+    )
 
 
 def has_chinese_char(string):
