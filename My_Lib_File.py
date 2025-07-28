@@ -81,7 +81,6 @@ def filename_stem(file_path):
     return filename_remove_append(filename_name(file_path))
 
 
-
 def replace_last_append(file_path, new_append: str):
     """
     Parameters:
