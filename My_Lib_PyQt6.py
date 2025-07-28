@@ -130,8 +130,8 @@ def get_open_directories():
         QApplication(sys.argv)
 
     file_dialog = QFileDialog()
-    file_dialog.setFileMode(QFileDialog.DirectoryOnly)
-    file_dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+    file_dialog.setFileMode(QFileDialog.FileMode.Directory)
+    file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     file_view = file_dialog.findChild(QListView, 'listView')
 
     # to make it possible to select multiple directories:
@@ -318,7 +318,7 @@ def alert_UI(message="", title="", parent=None):
         QApplication(sys.argv)
     if not title:
         title = message
-    QmessageBox.critical(parent, title, message)
+    QMessageBox.critical(parent, title, message)
 
 
 def warning_UI(message="", parent=None):
@@ -328,7 +328,7 @@ def warning_UI(message="", parent=None):
     print(message)
     if not QApplication.instance():
         QApplication(sys.argv)
-    QmessageBox.warning(parent, message, message)
+    QMessageBox.warning(parent, message, message)
 
 
 def information_UI(message="", parent=None):
@@ -339,13 +339,13 @@ def information_UI(message="", parent=None):
     print(message)
     if not QApplication.instance():
         QApplication(sys.argv)
-    QmessageBox.information(parent, message, message)
+    QMessageBox.information(parent, message, message)
 
 
 def wait_confirmation_UI(parent=None, message=""):
     if not QApplication.instance():
         QApplication(sys.argv)
-    button = QmessageBox.warning(parent, message, message, QMessageBox_Ok | QMessageBox_Cancel)
+    button = QMessageBox.warning(parent, message, message, QMessageBox_Ok | QMessageBox_Cancel)
     if button == QMessageBox_Ok:
         return True
     else:
@@ -517,7 +517,7 @@ def wait_messageBox(message, title="Please Wait..."):
     if not QApplication.instance():
         QApplication(sys.argv)
 
-    message_box = QmessageBox()
+    message_box = QMessageBox()
     message_box.setWindowTitle(title)
     message_box.setText(message)
 
