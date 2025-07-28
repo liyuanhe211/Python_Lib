@@ -341,8 +341,6 @@ def get_ipv6_address_from_external():
     return requests.get("https://v6.ident.me/", verify=False).text
 
 
-
-
 def remove_key_from_dict(input_dict, key):
     if key in input_dict:
         input_dict.pop(key)
@@ -412,7 +410,13 @@ def split_list_by_item(input_list: list, separator, lower_case_match=False, incl
     return split_list(input_list, separator, lower_case_match, include_separator, include_empty)
 
 
-def split_list(input_list: list, separator, lower_case_match=False, include_separator=False, include_separator_after=False, include_empty=False):
+def split_list(input_list: list,
+               separator=None,
+               lower_case_match=False,
+               include_separator=False,
+               include_separator_after=False,
+               include_empty=False,
+               separator_with_context=None):
     """
 
     :param input_list:
@@ -422,18 +426,23 @@ def split_list(input_list: list, separator, lower_case_match=False, include_sepa
     :param include_separator:
     :param include_separator_after:
     :param include_empty:
+    :param a function like separator_with_context(input_list, i) with i being the index return a bool
     :return:
     """
     ret = []
     temp = []
 
+    if separator is None and separator_with_context is None:
+        raise Exception("You need to either designate separator or separator_with_context")
+
     if include_separator or include_separator_after:
         assert not (include_separator and include_separator_after), 'include_separator and include_separator_after can not be True at the same time'
 
-    for item in input_list:
-
+    for count, item in enumerate(input_list):
         split_here_bool = False
-        if callable(separator):
+        if callable(separator_with_context):
+            split_here_bool = separator_with_context(input_list, count)
+        elif callable(separator):
             split_here_bool = separator(item)
         elif isinstance(item, str) and item == separator:
             split_here_bool = True
@@ -519,13 +528,18 @@ def get_appropriate_ticks(ranges, num_tick_limit=(4, 6), accept_closest_out_of_r
     return [optimal_start_point, optimal_end_point, optimal_distance]
 
 
-def get_input_with_while_cycle(break_condition=lambda x: not x.strip(), input_prompt="", strip_quote=True, backup_file=None):
+def get_input_with_while_cycle(break_condition=lambda x: not x.strip(),
+                               input_prompt="",
+                               strip_quote=True,
+                               backup_file=None,
+                               context_break_condition=None) -> list:
     """
     get multiple line of input, terminate with a condition, return the accepted lines
     :param break_condition: give a function, when it is met, the while loop is terminated.
     :param input_prompt: will print this every line
     :param strip_quote:
     :param backup_file: a file-like object (created by "open()") which will store the inputs for backup
+    :param context_break_condition: a function accepting two parameters, the first is the lines already get, the second is the current input_line.
     :return: list of accepted lines
     """
 
@@ -537,10 +551,12 @@ def get_input_with_while_cycle(break_condition=lambda x: not x.strip(), input_pr
             backup_file.write('\n')
         if strip_quote:
             input_line = input_line.strip().strip('"')
-        if break_condition(input_line):
+        if context_break_condition is not None:
+            if context_break_condition(ret, input_line):
+                break
+        elif break_condition(input_line):
             break
-        else:
-            ret.append(input_line)
+        ret.append(input_line)
     return ret
 
 
@@ -642,9 +658,9 @@ def optimization_timer(position_label=""):
         print("————————————", position_label, int(delta * 1000))
 
 
-def readable_timestamp(timestamp=0):
+def readable_timestamp(timestamp=None):
     from datetime import datetime
-    if not timestamp:
+    if timestamp is None:
         return datetime.now().strftime("%Y%m%d%H%M%S")
     else:
         return datetime.fromtimestamp(timestamp).strftime("%Y%m%d%H%M%S")
@@ -666,8 +682,11 @@ def remove_duplicate(input_list: list, access_function=None):
     return ret
 
 
-def remove_blank(input_list: list):
-    return [x for x in input_list if x]
+def remove_blank(input_list: list, is_valid_function=None):
+    if is_valid_function is None:
+        return [x for x in input_list if x]
+    else:
+        return [x for x in input_list if is_valid_function(x)]
 
 
 def cas_wrapper(input_str: str, strict=False, correction=False):
@@ -768,25 +787,25 @@ def cas_wrapper(input_str: str, strict=False, correction=False):
 def transpose_2d_list(list_input):
     return list(map(list, zip(*list_input)))
 
-def moving_averages(lst, n):
-    """
 
-    :param lst: [[x1,y1],[x2,y2],...]
-    :param n: up-rounded to the nearest odd number
-    :return:
-    """
-    if n%2==0:
-        n += 1
-    n = round((n-1)/2)
-    Xs,Ys = transpose_2d_list(lst)
-    result = []
-    for i in range(len(Ys)):
-        start = max(0, i - n)
-        end = min(len(lst), i + n + 1)
-        avg = average(Ys[start:end])
-        result.append([Xs[i],avg])
-    return result
-
+# def moving_averages(lst, n):
+#     """
+#
+#     :param lst: [[x1,y1],[x2,y2],...]
+#     :param n: up-rounded to the nearest odd number
+#     :return:
+#     """
+#     if n%2==0:
+#         n += 1
+#     n = round((n-1)/2)
+#     Xs,Ys = transpose_2d_list(lst)
+#     result = []
+#     for i in range(len(Ys)):
+#         start = max(0, i - n)
+#         end = min(len(lst), i + n + 1)
+#         avg = average(Ys[start:end])
+#         result.append([Xs[i],avg])
+#     return result
 
 def is_float(input_str):
     # 确定字符串可以转换为float
@@ -892,11 +911,11 @@ def right_strip_sequence_from_str(input_string: str, to_match):
     return input_string
 
 
-def phrase_range_selection(input_str, by_index=True):
+def parse_range_selection(input_str, decrease_by_1=True):
     """
-    Input a range like 1,5,7-9; output a list by index [0,4,6,7,8]; if not index [1,5,7,8,9]
+    Input a range like 1,5,7-9; output a list. If by index [0,4,6,7,8]; if not index [1,5,7,8,9]
     :param input_str:
-    :param by_index: the index will be 1 less than what's inputted
+    :param decrease_by_1: if true, the index will be decreased by 1 than what's inputted
     :return:
     """
 
@@ -915,11 +934,14 @@ def phrase_range_selection(input_str, by_index=True):
 
             start, end = choice.split('-')
             choices += [str(x) for x in range(int(start), int(end) + 1)]
-    if by_index:
+    if decrease_by_1:
         choices = sorted(list(set([int(x) - 1 for x in choices if '-' not in x])))
     else:
         choices = sorted(list(set([int(x) for x in choices if '-' not in x])))
     return choices
+
+
+phrase_range_selection = parse_range_selection
 
 
 def filename_from_url(url):
@@ -946,14 +968,21 @@ elements_dict = {0: "X", 89: 'Ac', 47: 'Ag', 13: 'Al', 95: 'Am', 18: 'Ar', 33: '
 
 num_to_element_dict = elements_dict
 element_to_num_dict = {}
-for key,value in elements_dict.items():
-    element_to_num_dict[value]=key
-    element_to_num_dict[value.lower()]=key
-    element_to_num_dict[value.upper()]=key
+for key, value in elements_dict.items():
+    element_to_num_dict[value] = key
+    element_to_num_dict[value.lower()] = key
+    element_to_num_dict[value.upper()] = key
 
 
 def chr_is_chinese(char):
-    return 0x4e00 <= ord(char) <= 0x9fa5
+    char = ord(char)
+    return (
+        0x4e00 <= char <= 0x9fff or  # CJK Unified Ideographs (most common Chinese characters)
+        0x3000 <= char <= 0x303f or  # CJK Symbols and Punctuation (。！？「」、 etc.)
+        0xff00 <= char <= 0xffef or  # Fullwidth forms (，．！＠＃ etc.)
+        0x2e80 <= char <= 0x2eff or  # CJK Radicals Supplement
+        0x3400 <= char <= 0x4dbf     # CJK Unified Ideographs Extension A
+    )
 
 
 def has_chinese_char(string):
