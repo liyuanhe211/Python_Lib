@@ -11,6 +11,9 @@ from scipy.interpolate import interp1d, splrep, splev
 from statistics import mean
 from itertools import groupby
 
+def set_matplotlib_backend():
+    import matplotlib
+    matplotlib.use("TkAgg")
 
 def interpolation_with_grouping(Xs, Ys, kind, smoothing=None):
     """
