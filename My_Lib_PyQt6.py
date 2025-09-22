@@ -41,6 +41,8 @@ QMessageBox_YesToAll = QMessageBox.StandardButton.YesToAll
 
 QTextCursor_End = QTextCursor.MoveOperation.End
 
+QCrossCursor = QtCore_Qt.CursorShape.CrossCursor
+
 import platform
 
 # import matplotlib
@@ -170,12 +172,14 @@ def toggle_layout(layout, hide=-1, show=-1):
             if layout.itemAt(i).widget():
                 layout.itemAt(i).widget().show()
 
+
 def clear_layout(layout):
     while layout.count():
         item = layout.takeAt(0)
         widget = item.widget()
         if widget:
             widget.deleteLater()
+
 
 def set_slider_to_line(textedit, line_number):
     scroll_bar = textedit.verticalScrollBar()
@@ -470,6 +474,70 @@ def pyqt_ui_compile(filename):
             ui_File_Compile_content = ui_File_Compile_object.read()
         with open(py_file, 'w', encoding='utf-8') as ui_File_Compile_object:
             ui_File_Compile_object.write(ui_File_Compile_content)
+
+
+class ResizableLabel(QtWidgets.QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(30)
+
+        # Base font setup
+        self.base_font = QtGui.QFont("Arial", 10)
+        self.setFont(self.base_font)
+        self.max_font_size = 10
+        self.min_font_size = 6  # prevent disappearing text
+        self.current_font_size = self.max_font_size
+
+        # Enable word wrap so text can adjust height
+        self.setWordWrap(True)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.adjustFontSize()
+
+    def setText(self, text: str):
+        super().setText(text)
+        self.adjustFontSize()
+
+        # if self.text().strip() == "":
+        #     self.setMaximumHeight(0)
+        #     self.setMinimumHeight(0)
+        #     self.hide()
+        # else:
+        #     self.show()
+        #     self.adjustFontSize()
+
+    def adjustFontSize(self):
+        """Adjust font size to fit width while keeping height flexible."""
+        if not self.text().strip():
+            return
+
+        available_width = self.width()
+        font = QtGui.QFont(self.base_font)
+
+        for font_size in range(self.max_font_size,self.min_font_size-1,-1):
+            font.setPointSize(font_size)
+            fm = QtGui.QFontMetrics(font)
+            text_width = fm.horizontalAdvance(self.text())
+
+            if text_width <= available_width or font_size == self.min_font_size:
+                self.current_font_size = font_size
+                break
+
+        self.setFont(font)
+
+        # Adjust height based on text contents
+        fm = QtGui.QFontMetrics(font)
+        text_rect = fm.boundingRect(
+            0, 0, available_width, 0,
+            QtCore.Qt.TextFlag.TextWordWrap,
+            self.text()
+        )
+        new_height = max(text_rect.height() + 6, 30)  # +6 for padding
+        self.setMinimumHeight(new_height)
+        self.setMaximumHeight(new_height)
 
 
 class Ui_Wait_Message_Form(object):
