@@ -10,6 +10,7 @@ import pickle
 import re
 import time
 import datetime
+import csv
 import json
 from datetime import datetime, timedelta
 import random
@@ -788,24 +789,29 @@ def transpose_2d_list(list_input):
     return list(map(list, zip(*list_input)))
 
 
-# def moving_averages(lst, n):
-#     """
-#
-#     :param lst: [[x1,y1],[x2,y2],...]
-#     :param n: up-rounded to the nearest odd number
-#     :return:
-#     """
-#     if n%2==0:
-#         n += 1
-#     n = round((n-1)/2)
-#     Xs,Ys = transpose_2d_list(lst)
-#     result = []
-#     for i in range(len(Ys)):
-#         start = max(0, i - n)
-#         end = min(len(lst), i + n + 1)
-#         avg = average(Ys[start:end])
-#         result.append([Xs[i],avg])
-#     return result
+def moving_averages(Ys, n):
+    # Ensure n is an odd window size
+    assert is_int(n)
+    if n % 2 == 0:
+        n += 1
+    half = (n - 1) // 2  # "radius" on each side
+
+    # Build prefix sum array: prefix_sum[i] = sum of Ys[:i]
+    prefix_sum = [0] * (len(Ys) + 1)
+    for i, val in enumerate(Ys):
+        prefix_sum[i + 1] = prefix_sum[i] + val
+
+    # Compute moving averages
+    result = []
+    for i in range(len(Ys)):
+        start = max(0, i - half)
+        end = min(len(Ys), i + half + 1)  # end is exclusive in prefix sums
+        window_sum = prefix_sum[end] - prefix_sum[start]
+        window_count = end - start
+        result.append(window_sum / window_count)
+
+    return result
+
 
 def is_float(input_str):
     # 确定字符串可以转换为float
@@ -977,11 +983,11 @@ for key, value in elements_dict.items():
 def chr_is_chinese(char):
     char = ord(char)
     return (
-        0x4e00 <= char <= 0x9fff or  # CJK Unified Ideographs (most common Chinese characters)
-        0x3000 <= char <= 0x303f or  # CJK Symbols and Punctuation (。！？「」、 etc.)
-        0xff00 <= char <= 0xffef or  # Fullwidth forms (，．！＠＃ etc.)
-        0x2e80 <= char <= 0x2eff or  # CJK Radicals Supplement
-        0x3400 <= char <= 0x4dbf     # CJK Unified Ideographs Extension A
+            0x4e00 <= char <= 0x9fff or  # CJK Unified Ideographs (most common Chinese characters)
+            0x3000 <= char <= 0x303f or  # CJK Symbols and Punctuation (。！？「」、 etc.)
+            0xff00 <= char <= 0xffef or  # Fullwidth forms (，．！＠＃ etc.)
+            0x2e80 <= char <= 0x2eff or  # CJK Radicals Supplement
+            0x3400 <= char <= 0x4dbf  # CJK Unified Ideographs Extension A
     )
 
 
@@ -1103,19 +1109,46 @@ def save_config(config):
 #     r = requests.get(url,cookies = cookie)
 #     print(r.headers)
 
+# def read_csv(file):
+#     """
+#     Read a csv file, return a same_length_2D_list
+#     :return: return a 2D-list, same as the csv file, all sub-list are the same length. If the content is 'floatable', it will be convert to float
+#     """
+#
+#     with open(file) as input_file:
+#         input_file_content = input_file.readlines()
+#
+#     input_file_content = [x.strip().split(',') for x in input_file_content]
+#     data = [[(float(y) if is_float(y) else y) for y in x] for x in input_file_content]
+#     return same_length_2d_list(data)
+#
+
 
 def read_csv(file):
-    """
-    Read a csv file, return a same_length_2D_list
-    :return: return a 2D-list, same as the csv file, all sub-list are the same length. If the content is 'floatable', it will be convert to float
-    """
-
-    with open(file) as input_file:
-        input_file_content = input_file.readlines()
-
-    input_file_content = [x.strip().split(',') for x in input_file_content]
-    data = [[(float(y) if is_float(y) else y) for y in x] for x in input_file_content]
+    data = []
+    with open(file, "r", newline="") as file:
+        reader = csv.reader(file)
+        for row in reader:
+            data.append([(float(x) if is_float(x) else x) for x in row])
     return same_length_2d_list(data)
+
+
+def read_csv_and_transpose(filename):
+    """
+    read in an csv file and transpose it
+    :param filename:
+    :return: a list of lists, each list contain one column of the xlsx file
+    """
+
+    data = read_csv(filename)
+    ret = transpose_2d_list(data)
+    # for i in ret:
+    #     print(i[600:])
+    return ret
+
+
+# backward compatibility
+read_csv_to_horizontal_lists = read_csv_and_transpose
 
 
 def read_txt_table(file, separater='\t'):
@@ -1150,3 +1183,63 @@ def import_from_absolute_path(path_to_py):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def remove_invalid_data(x, y, accept_function=float, first_as_label=False):
+    """
+    # filter two lists of data (it should be the same length), only when a pair of them are all acceptable, the data point is taken
+    :param first_as_label:
+    :param x:
+    :param y:
+    :param accept_function: a function, that returns true when the data is acceptable
+    :return:output_x,output_y,label_x,label_y
+    """
+
+    if first_as_label:
+        label_x = str(x[0])
+        label_y = str(y[0])
+    else:
+        label_x = ""
+        label_y = ""
+
+    output_x = []
+    output_y = []
+    assert len(x) == len(y), 'Length of two input lists are not the same.'
+
+    for i in range(1, len(x)):
+
+        try:
+            new_x = accept_function(x[i])
+            new_y = accept_function(y[i])
+        except Exception:
+            continue
+
+        output_x.append(new_x)
+        output_y.append(new_y)
+
+    return output_x, output_y, label_x, label_y
+
+
+
+def print_float_and_stderr(value, stderr, sig_digits=2):
+    # e.g. digit=3
+    # 12312.15 ± 12.13 --> 12312 ± 12
+    # 12312.15 ± 0.03 --> 12312.15 ± 0.03
+    # 0.001234 ± 0.000010 --> 0.00123 ± 0.00001
+
+    # number of the digits after the decimal
+    # minimum zero
+    # if stderr larger than zero, take that
+    # if sig_digit>current sig_digits, take that
+    try:
+        digits_after_dec = -int(math.log(stderr, 10)) + 1
+        digits_after_dec = max(0, digits_after_dec)
+        value_accuracy = math.floor(-math.log(abs(value), 10)) + sig_digits
+        digits_after_dec = max(digits_after_dec, value_accuracy)
+        return "{:.[DIGIT]f} ± {:.[DIGIT]f}".replace("[DIGIT]", str(digits_after_dec)).format(value, stderr)
+    except OverflowError as e:
+        print(e)
+        return str(value) + " ± " + str(stderr)
+    except ValueError as e:
+        print(e)
+        return str(value) + " ± " + str(stderr)

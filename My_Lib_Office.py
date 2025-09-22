@@ -66,6 +66,20 @@ def read_xlsx(file, sheet=0, all_sheets=False):
         return same_length_2d_list(ret)
 
 
+def read_xlsx_and_transpose(filename):
+    """
+    read in an xlsx file and transpose it
+    :param filename:
+    :return: a list of lists, each list contain one column of the xlsx file
+    """
+
+    data = read_xlsx(filename)
+    return transpose_2d_list(data)
+
+
+read_xlsx_to_horizontal_lists = read_xlsx_and_transpose
+
+
 def write_xlsx(filename, list_2D, transpose=False):
     """
     A simple function for writing a 2D list to a xlsx file
