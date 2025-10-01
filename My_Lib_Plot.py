@@ -77,6 +77,19 @@ matplotlib_dot_formats = [circle_mkr, square_mkr, diamond_mkr, triangle_down_mkr
 matplotlib_colors = [blue_color, red_color, green_color, purple_color, orange_color, cyan_color, yellow_color, pink_color, brown_color, grey_color]
 matplotlib_colors = matplotlib_colors * 10000
 
+WINDOW_POSITIONS = {1: ((0, 0)),
+                    2: ((-0.5, 0), (0.5, 0)),
+                    3: ((-1, 0), (0, 0), (1, 0)),
+                    4: ((-1.5, 0), (-0.5, 0), (0.5, 0), (1.5, 0)),
+                    5: ((-0.5, -0.5), (0.5, -0.5),
+                        (-1, 0.5), (0, 0.5), (1, 0.5)),
+                    6: ((-1, -0.5), (0, -0.5), (1, -0.5),
+                        (-1, 0.5), (0, 0.5), (1, 0.5)),
+                    7: ((-1, -0.5), (0, -0.5), (1, -0.5),
+                        (-1.5, 0.5), (-0.5, 0.5), (0.5, 0.5), (1.5, 0.5)),
+                    8: ((-1.5, -0.5), (-0.5, -0.5), (0.5, -0.5), (1.5, -0.5),
+                        (-1.5, 0.5), (-0.5, 0.5), (0.5, 0.5), (1.5, 0.5))}
+
 # Define the wavelength ranges and their colors and labels
 Solar_wavelengths = [(100, 290, 'black', 'Harmful'),
                      (290, 315, '#7603B2', 'UVB'),
@@ -119,6 +132,18 @@ class Global_QApplication:
             Global_QApplication._timer.timeout.connect(lambda: None)  # dummy callback
             Global_QApplication._timer.start(50)  # run every 50 ms
         return Global_QApplication._app
+
+
+def convert_torch_tensor(input_):
+    if type(input_).__name__ == "Tensor" and type(input_).__module__ == "torch":
+        from My_Lib_MachineLearning import tensor_to_list
+        return tensor_to_list(input_)
+    elif isinstance(input_, (list, tuple)):
+        # recursively handle lists/tuples
+        return [convert_torch_tensor(x) for x in input_]
+    else:
+        # not a tensor or list/tuple, return as-is
+        return input_
 
 
 class Curve:
@@ -176,13 +201,13 @@ class Curve:
         """
 
         # Initialization to avoid mutable initial value
-        X = X or []
-        Y = Y or []
-        Y_errorbar = Y_errorbar or []
-        Y_sampling_data = Y_sampling_data or []
-        X_and_Y = X_and_Y or []
-        XY_pairs = XY_pairs or []
-        XYs = XYs or []
+        X = [] if X is None else X
+        Y = [] if Y is None else Y
+        Y_errorbar = [] if Y_errorbar is None else Y_errorbar
+        Y_sampling_data = [] if Y_sampling_data is None else Y_sampling_data
+        X_and_Y = [] if X_and_Y is None else X_and_Y
+        XY_pairs = [] if XY_pairs is None else XY_pairs
+        XYs = [] if XYs is None else XYs
 
         self.interpolation_kind = interpolation_kind
         self.interpolation_number = interpolation_number
@@ -191,20 +216,8 @@ class Curve:
 
         if XYs:
             X_and_Y = XYs
-
         if XY_pairs:
             X_and_Y = transpose_2d_list(XY_pairs)
-
-        if dot_color and not curve_color:
-            curve_color = dot_color
-        if curve_color and not dot_color:
-            dot_color = curve_color
-
-        if plot_curve is None and plot_dot is None:
-            plot_curve = True
-
-        if plot_curve and not curve_format:
-            curve_format = '-'
 
         assert not (interp1d_object is not None and fitted_function is not None)
         assert not (interp1d_object is not None and Y)
@@ -259,9 +272,20 @@ class Curve:
         elif scale_factor is not None:
             self.Ys = [y * scale_factor for y in self.Ys]
 
+        self.Xs = convert_torch_tensor(self.Xs)
+        self.Ys = convert_torch_tensor(self.Ys)
+
         self.Xs = np.array(self.Xs)
         self.Ys = np.array(self.Ys)
 
+        if dot_color and not curve_color:
+            curve_color = dot_color
+        if curve_color and not dot_color:
+            dot_color = curve_color
+        if plot_curve is None and plot_dot is None:
+            plot_curve = True
+        if plot_curve and not curve_format:
+            curve_format = '-'
         self.plot_dot = plot_dot
         self.dot_format = dot_format
         self.dot_color = dot_color
@@ -273,14 +297,22 @@ class Curve:
         self.do_interpolation = do_interpolation
         self.curve_legend_color = curve_legend_color
         self.curve_legend_format = curve_legend_format
-        try:
-            self.update_interp1d()
-        except Exception:
-            traceback.print_exc()
-            self.interpolation_xs = None
-            self.interp1d = None
+        self._interpolation_xs = None
+        self._interp1d = None
 
         self.X_and_Y = list(zip(self.Xs, self.Ys))  # for debugging
+
+    @property
+    def interpolation_xs(self):
+        if self._interpolation_xs is None:
+            self.update_interp1d()
+        return self._interpolation_xs
+
+    @property
+    def interp1d(self):
+        if self._interp1d is None:
+            self.update_interp1d()
+        return self._interp1d
 
     def normalize_to(self, normalize_to: Union[int, float, Sequence]):
         self.normalization_target_value = normalize_to
@@ -300,8 +332,8 @@ class Curve:
 
     def update_interp1d(self):
         # print(min(self.Xs), max(self.Xs),self.interpolation_number)
-        self.interpolation_xs = np.linspace(min(self.Xs), max(self.Xs), num=self.interpolation_number)
-        self.interp1d = interpolation_with_grouping(self.Xs, self.Ys, kind=self.interpolation_kind, smoothing=self.interpolation_smoothing)
+        self._interpolation_xs = np.linspace(min(self.Xs), max(self.Xs), num=self.interpolation_number)
+        self._interp1d = interpolation_with_grouping(self.Xs, self.Ys, kind=self.interpolation_kind, smoothing=self.interpolation_smoothing)
 
     def minus_constant(self, constant):
         self.Xs = [x - constant for x in self.Xs]
@@ -389,8 +421,8 @@ class Curve:
         self.update_interp1d()
         self.moving_average_processed = True
 
-    def export_xlsx(self, path="",filename = ""):
-        filename = os.path.join(path,filename)
+    def export_xlsx(self, path="", filename=""):
+        filename = os.path.join(path, filename)
         if path and not os.path.isdir(path):
             os.makedirs(path)
         if not filename:
@@ -458,19 +490,9 @@ class Curve:
 
 
 class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
-    """
-    A PyQt window that embeds a matplotlib FigureCanvas. If you create multiple
-    instances of this class, each will launch its own window.
-
-    You can set or change the Curve_objects data via set_plot_data(...).
-    Whenever the data changes, the plot is automatically re-drawn.
-
-    This uses a non-blocking approach (plt.ion), so the windows remain responsive.
-    """
-
     def __init__(
             self,
-            Curve_objects: Sequence[Curve],
+            Curve_objects: Sequence[Curve] = None,
             x_axis_label="X",
             y_axis_label="Y",
             fig_size=(4, 3),
@@ -478,7 +500,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             plot_legend=True,
             legend_font_size=None,
             x_lim=None,
-                # None: Choose automatically, (None, 400): Choose left automatically, choose right as 400, (100,400): choose 100-400
+            # None: Choose automatically, (None, 400): Choose left automatically, choose right as 400, (100,400): choose 100-400
             y_lim=None,
             x_log=False,
             y_log=False,
@@ -492,16 +514,18 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             y2_axis_label="",
             non_blocking=False,
             auto_color=None,
-                # if True, the color of the lines will be overrided with the default matplotlib color list.
-                # If auto_color = None and there is no color specified in any of the curves, auto_color = True
+            # if True, the color of the lines will be overrided with the default matplotlib color list.
+            # If auto_color = None and there is no color specified in any of the curves, auto_color = True
             save_img_filepath=None,
-                # if is a string, the plot will be saved to the filepath as png file, without showing
+            # if is a string, the plot will be saved to the filepath as png file, without showing
             save_img_dpi=3000,
             use_chinese_font=False,
             parent=None,
             shift_window=(0, 0),
-                # shift the window position like in a grid layout for x grid to the right and y grid down. The grid size is the current window size
-            title = ""
+            # shift the window position like in a grid layout for x grid to the right and y grid down. The grid size is the current window size
+            multiple_plot_arrangement=None, # e.g. (3,8) means that the window should be positioned as if it is the 3rd window in a 8 windows grid.
+            figure_title="",
+            window_title="Plot Points Window"
     ):
         # Make sure a QApplication exists
         self._app = Global_QApplication.get_app()
@@ -530,6 +554,14 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.chinese_font = use_chinese_font
         self.save_img_filepath = save_img_filepath
         self.save_img_dpi = save_img_dpi
+        self.current_location = (0,0)
+        self.comrades:List[QWidget] = []
+        if isinstance(shift_window, (int, float)):
+            shift_window = (shift_window, 0)
+        if multiple_plot_arrangement is not None:
+            current_window_number, total_windows = multiple_plot_arrangement
+            shift_window = WINDOW_POSITIONS[total_windows][current_window_number]
+        self._shift_window = shift_window
 
         matplotlib.rcParams['savefig.dpi'] = self.save_img_dpi
         plt.ion()
@@ -557,18 +589,29 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         toolbar_height = self._toolbar.sizeHint().height()
         self.pause_button.setFixedSize(60, toolbar_height)
 
+        # Create the “Bring to front” button to the right of the toolbar
+        self.raise_button = QtWidgets.QPushButton("Raise All", self)
+        self.raise_button.setStyleSheet("background-color: #f0f0f0;")
+        raise_font = QtGui.QFont("Arial", 10)
+        self.raise_button.setFont(raise_font)
+        toolbar_height = self._toolbar.sizeHint().height()
+        self.raise_button.setFixedSize(60, toolbar_height)
+        connect_once(self.raise_button,self.bring_to_front)
+
         # Add horizontal layout for the resizable label with left spacer
         label_layout = QtWidgets.QHBoxLayout()
         label_layout.addSpacing(50)  # horizontal left spacer
-        self.resizable_label = ResizableLabel(title, self)
+        self.resizable_label = ResizableLabel(figure_title, self, font_size+1)
+
         # self.resizable_label.setStyleSheet("background-color: #f00000;")
         label_layout.addWidget(self.resizable_label)
         label_layout.addSpacing(10)  # horizontal left spacer
         # label_layout.addStretch()  # optional: push label to the left if needed
-
+        toolbar_layout.addWidget(self.raise_button)
         toolbar_layout.addWidget(self.pause_button)
         toolbar_layout.setSpacing(0)
         # Now add them as the first row
+
         layout.addLayout(toolbar_layout)
         layout.addSpacing(10)
         layout.addLayout(label_layout)
@@ -584,18 +627,42 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             plt.rcParams['font.family'] = prop.get_name()
 
         self._Curve_objects = []
-        self.Curve_objects = Curve_objects
+        self.Curve_objects = Curve_objects if Curve_objects else []
 
-        self.setWindowTitle("Plot Points Window")
-        self.show()
+        self.setWindowTitle(window_title)
+        if self.Curve_objects:
+            self.show()
+            self.center_the_widget()
+            self.move_window()
 
-        self.center_the_widget()
+    def bring_to_front(self):
+        self.activateWindow()
+        for window in self.comrades:
+            window.activateWindow()
 
-        if isinstance(shift_window, (int, float)):
-            shift = (shift_window, 0)
-        new_x_position = self.pos().x() + shift_window[0] * self.width()
-        new_y_position = self.pos().y() + shift_window[1] * self.height()
-        self.move(new_x_position, new_y_position)
+    @property
+    def shift_window(self):
+        return self._shift_window
+
+    @shift_window.setter
+    def shift_window(self,new_tuple):
+        self._shift_window = new_tuple
+        self.move_window()
+
+    def move_window(self):
+        screen_geometry = Global_QApplication.get_app().primaryScreen().availableGeometry()
+        screen_width = screen_geometry.width()
+        screen_height = screen_geometry.height()
+
+        # Calculate top-left point if centered
+        x_centered = (screen_width - self.width()) // 2
+        y_centered = (screen_height - self.height()) // 2
+
+        new_x_position = x_centered + self.shift_window[0] * (self.width()+3)
+        new_y_position = y_centered + self.shift_window[1] * (self.height()+30)
+        if (new_x_position,new_y_position)!=self.current_location:
+            self.move(round(new_x_position), round(new_y_position))
+            self.current_location = (new_x_position,new_y_position)
 
     @property
     def Curve_objects(self):
@@ -608,13 +675,17 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         else:
             self._Curve_objects = list(new_Curve_objects)
         self._update_plot()
+        self.move_window()
 
-    def set_title(self,title):
-        self.resizable_label.setText(title)
+    def set_figure_title(self, title):
+        self.resizable_label.setText(str(title))
         # if not title.strip():
         #     self.resizable_label.hide()
         # else:
         #     self.resizable_label.show()
+
+    def set_window_title(self, title):
+        self.setWindowTitle(title)
 
     def update_data(self, new_Curve_objects, pause=0):
         self.Curve_objects = new_Curve_objects
@@ -633,7 +704,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             end_time = time.time() + seconds
             while time.time() < end_time:
                 QtWidgets.QApplication.processEvents()
-                time.sleep(0.01)
+                time.sleep(0.001)
         else:
             app = Global_QApplication.get_app()
             app.exec()
@@ -645,6 +716,14 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         user can pan/zoom the current plot without updates.
         """
         # If pause button is checked, do not update the data portion
+
+        if not self._Curve_objects:
+            self.hide()
+            return
+        else:
+            if not self.isVisible():
+                self.show()
+
         while self.pause_button.isChecked():
             self.pause(0.05)
 
@@ -820,6 +899,13 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             self._fig.savefig(self.save_img_filepath, dpi=self.save_img_dpi)
 
         update_UI()
+
+    def save_png(self, output_filename, dpi=None):
+        dpi = dpi or self.save_img_dpi
+        self._fig.savefig(output_filename, dpi=dpi, bbox_inches="tight")
+
+    def save_svg(self, output_filename):
+        self._fig.savefig(output_filename, bbox_inches="tight")
 
 
 def integrate_discrete_points(x_values, y_values, start_range, end_range):
@@ -1037,7 +1123,6 @@ def substract_component(curve, bkg,
     intensity_weight_function = np.vectorize(intensity_weight_function)
 
     def penalty(ratio):
-
         monitor_by_xlsx = []
         ret_points = curve_points - bkg_points * ratio
         negative_punish_weights = intensity_weight_function(bkg_points)
@@ -1071,8 +1156,6 @@ def draw_xlsx(xlsx_files):
         plot_objects.append(plot_object)
 
     Plot(plot_objects)
-
-
 
 
 def nonlinear_model_fit(model, X, Y, initial_guesses, variable_names=None, Y_uncertainties=None,
@@ -1287,6 +1370,8 @@ def regression_on_UVI_over_distance(input_X, input_Y):
 
 def sum_of_multiple_Gaussians(x, *parameters):
     assert len(parameters) % 3 == 0
+    if not isinstance(x,np.ndarray):
+        x = np.array(x)
     ret = 0
     for parameter_index in range(0, len(parameters), 3):
         A, x0, sigma = parameters[parameter_index:parameter_index + 3]
@@ -1303,10 +1388,10 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
     :return:
         [ret]
             a list of list, (one_gaussian_fit_parameters (3-tuple of A, x0, sigma),
-                                        two_gaussian_fit_parameters (6-tuple of  A, x0, sigma,  A, x0, sigma),
-                                        three_gaussian_fit_parameters (9-tuple),
-                                        ...
-                                        )
+                             two_gaussian_fit_parameters (6-tuple of  A, x0, sigma,  A, x0, sigma),
+                             three_gaussian_fit_parameters (9-tuple),
+                             ...
+                             )
             The returned tuple will truncate at max_gaussians, or the first case where the fitting failed.
         [residue]
             the excess and deficient percentage of the curve - fitted_curve
@@ -1315,6 +1400,11 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
     X_lower_bound = min(X)
     X_upper_bound = max(X)
     Y_upper_bound = max(Y)
+    wavelength_bound_relax = 50
+    intensity_bound = 5
+    min_sigma = 10
+    max_sigma = 50
+
     AUC = integrate_discrete_points(X, Y, X_lower_bound, X_upper_bound)
 
     ret = []
@@ -1326,18 +1416,23 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
         single_gaussian = nonlinear_model_fit(sum_of_multiple_Gaussians,
                                               X, current_residue,
                                               (Y_at_max, X_at_max, 20),
-                                              lower_bounds=(0, X_lower_bound - 50, 1),
-                                              upper_bounds=(Y_upper_bound * 2, X_upper_bound + 50, 2 * (X_upper_bound - X_lower_bound)),
+                                              lower_bounds=(0, X_lower_bound - wavelength_bound_relax, min_sigma),
+                                              upper_bounds=(Y_upper_bound * intensity_bound,
+                                                            X_upper_bound + wavelength_bound_relax,
+                                                           max_sigma),
                                               show_plot=False, print_result=False)
 
         try:
             all_gaussian = nonlinear_model_fit(sum_of_multiple_Gaussians,
                                                X, Y,
                                                (ret[-1] if ret else []) + list(single_gaussian),
-                                               lower_bounds=[0, X_lower_bound - 50, 1] * num_Gaussian,
-                                               upper_bounds=[Y_upper_bound * 2, X_upper_bound + 50, 2 * (X_upper_bound - X_lower_bound)] * num_Gaussian,
+                                               lower_bounds=[0, X_lower_bound - wavelength_bound_relax, min_sigma] * num_Gaussian,
+                                               upper_bounds=[Y_upper_bound * intensity_bound,
+                                                             X_upper_bound + wavelength_bound_relax,
+                                                             max_sigma] * num_Gaussian,
                                                print_result=False, show_plot=False)
         except RuntimeError as _:  # 没有拟合出来
+            print("Stopped after fitting",num_Gaussian,"Gaussians.")
             break
 
         ret.append(list(all_gaussian.tolist()))
@@ -1359,15 +1454,19 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
 
 
 if __name__ == "__main__":
+    a = Plot()
+    b = Plot()
+    input("123")
     X = [1, 2, 3, 4, 5]
-    Y = [5, 2, 6, 3, 1]
-
-    a = Plot(Curve(X, Y),shift_window=(1,0),title='123')
-    b = Plot(Curve(X, Y),shift_window=(0,0))
-    a.pause(1)
-
-    Y = [5, 3, 12, 3, 1]
-    a.Curve_objects = (Curve(X, Y))
-    a.set_title('456')
-    b.Curve_objects = (Curve(X, Y))
-    a.pause()
+    # a = Plot(Curve(X, [random.random() for _ in range(len(X))]),shift_window=(1,0),title='123')
+    # b = Plot(Curve(X, [random.random() for _ in range(len(X))]),shift_window=(0,0))
+    # a.pause(1)
+    count = 1
+    while True:
+        X = [1, 2, 3, 4, 5]
+        Y = [random.random() for _ in range(len(X))]
+        a.Curve_objects = (Curve(X, [random.random() for _ in range(len(X))]))
+        b.Curve_objects = (Curve(X, [random.random() for _ in range(len(X))]))
+        a.set_figure_title(count)
+        b.set_figure_title(count)
+        count += 1

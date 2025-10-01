@@ -836,7 +836,7 @@ def is_int(input_str):
     num = float(input_str)
     # print(int(input_str))
     # print(num)
-    if int(input_str) == num:
+    if round(num) == num:
         return True
     else:
         return False
@@ -1151,6 +1151,19 @@ def read_csv_and_transpose(filename):
 read_csv_to_horizontal_lists = read_csv_and_transpose
 
 
+def read_csv_to_list_of_dicts(filename):
+    data = read_csv(filename)
+    ret = []
+    headers = data[0]
+    assert len(headers)==len(set(headers)), "You have duplicated header item"
+    for line in data[1:]:
+        item = {}
+        for header,cell in zip(headers,line):
+            item[header] = cell
+        ret.append(item)
+    return ret
+
+
 def read_txt_table(file, separater='\t'):
     data = open(file).readlines()
     data = [x.split(separater) for x in data]
@@ -1243,3 +1256,18 @@ def print_float_and_stderr(value, stderr, sig_digits=2):
     except ValueError as e:
         print(e)
         return str(value) + " ± " + str(stderr)
+
+
+def print_time_difference(elapsed_seconds):
+    hours, remainder = divmod(elapsed_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    seconds = math.ceil(seconds)
+    minutes = int(minutes)
+    hours = int(hours)
+
+    if elapsed_seconds < 3600:  # < 1 hour → XX:XX
+        return f"{minutes}:{seconds:02}".rjust(8)
+    elif elapsed_seconds < 36000:  # < 10 hours → X:XX:XX
+        return f"{hours}:{minutes:02}:{seconds:02}".rjust(8)
+    else:  # >= 10 hours → XX:XX:XX
+        return f"{hours:02}:{minutes:02}:{seconds:02}".rjust(8)

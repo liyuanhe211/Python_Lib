@@ -29,10 +29,15 @@ def interpolation_with_grouping(Xs, Ys, kind, smoothing=None):
     :return: A callable function that evaluates the interpolation at any given X
     """
     # Process the (X, Y) pairs
+
+    if len(Xs)<=1 and len(Ys)<=1:
+        return lambda x:x
+
     process_XYs = list(zip(Xs, Ys))
     process_XYs.sort(key=lambda x: x[0])
     grouper = groupby(process_XYs, key=lambda x: x[0])
     processed_XYs = [[x, mean(yi[1] for yi in y)] for x, y in grouper]
+    # print(process_XYs)
 
     # Unzip the processed data
     interp1d_X, interp1d_Y = zip(*processed_XYs)
