@@ -66,6 +66,20 @@ def read_xlsx(file, sheet=0, all_sheets=False):
         return same_length_2d_list(ret)
 
 
+def read_xlsx_to_list_of_dicts(filename):
+    data = read_xlsx(filename)
+    ret = []
+    headers = data[0]
+    assert len(headers)==len(set(headers)), "You have duplicated header item"
+    for line in data[1:]:
+        item = {}
+        for header,cell in zip(headers,line):
+            item[header] = cell
+        ret.append(item)
+    return ret
+
+
+
 def read_xlsx_and_transpose(filename):
     """
     read in an xlsx file and transpose it

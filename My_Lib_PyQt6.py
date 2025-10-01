@@ -477,16 +477,16 @@ def pyqt_ui_compile(filename):
 
 
 class ResizableLabel(QtWidgets.QLabel):
-    def __init__(self, text="", parent=None):
+    def __init__(self, text="", parent=None, max_font_size = 10):
         super().__init__(text, parent)
 
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.setMinimumHeight(30)
 
         # Base font setup
-        self.base_font = QtGui.QFont("Arial", 10)
+        self.base_font = QtGui.QFont("Arial", max_font_size)
         self.setFont(self.base_font)
-        self.max_font_size = 10
+        self.max_font_size = max_font_size
         self.min_font_size = 6  # prevent disappearing text
         self.current_font_size = self.max_font_size
 
@@ -525,7 +525,7 @@ class ResizableLabel(QtWidgets.QLabel):
             if text_width <= available_width or font_size == self.min_font_size:
                 self.current_font_size = font_size
                 break
-
+        # print("Font size:", font_size)
         self.setFont(font)
 
         # Adjust height based on text contents
