@@ -70,16 +70,22 @@ def set_seed(seed=ML_RANDOM_SEED):
 set_seed(ML_RANDOM_SEED)
 
 
-def print_tensor(input_tensor: torch.tensor, precision=4, scientific_notation_limit=4):
-    smart_format_float()
+# def print_tensor(input_tensor: torch.tensor, precision=4, scientific_notation_limit=4):
+#     smart_format_float()
     # TODO
-
 
 # a = torch.tensor([1.,2.,3.,4.,5.1248120985602985694])
 # print(a)
 
+def load_and_preprocess_data(Xs,
+                             Ys,
+                             test_set_ratio,
+                             forward_norm_functions=[]):
+    assert 0 < test_set_ratio < 1
+    self.Xs_train, self.Xs_test, self.Ys_train, self.Ys_test = train_test_split(Xs, Ys, test_size=test_set_ratio)
 
-def dataset_normalization(X, Y, *converting_functions):
+
+def dataset_normalization(X, Y, *forward_norm_functions):
     """
     parameters:
         Given X,Y, both are n lines of tuple of input/output vectors
@@ -88,13 +94,15 @@ def dataset_normalization(X, Y, *converting_functions):
               (5,6),
               ...]
         if one of X,Y is only n lines of float, it is converted to n lines of 1-tuple of input/output vectors
-    
+
+        [converting_functions]
+
         The length of the converting_functions should be the sum of the vector dimensions of the input/output vectors,
         e.g. for an input dimension of 5, and output dimension of 2, the converting_functions should have 7 objects.
         For each column (feature or target):
-            1) None → standardization to (mean=0, std=1).  
+            1) [None] → standardization to (mean=0, std=1).
                If all values are identical, you get 0, and inverse returns by adding the mean back. 
-            2) False → no transformation.
+            2) [False] → no transformation.
             3) (lower_bound, upper_bound) → linear scaling to [lower_bound, upper_bound].  
                If all values are identical, everything is mapped to the midpoint of [lower_bound, upper_bound],
                and the inverse returns the original value by adding the mean back.
@@ -128,10 +136,10 @@ def dataset_normalization(X, Y, *converting_functions):
 
     # Ensure we have enough converting functions for X + Y columns.
     total_dims = dX + dY
-    if len(converting_functions) != total_dims:
+    if len(forward_norm_functions) != total_dims:
         raise ValueError(
             f"Expected {total_dims} converting functions for X (dim={dX}) + Y (dim={dY}), "
-            f"got {len(converting_functions)}."
+            f"got {len(forward_norm_functions)}."
         )
 
     # Combine X and Y horizontally for column-wise processing.
@@ -142,7 +150,7 @@ def dataset_normalization(X, Y, *converting_functions):
     reversing_functions = [None] * total_dims
 
     # Process each column according to the corresponding converting function.
-    for i, conv in enumerate(converting_functions):
+    for i, conv in enumerate(forward_norm_functions):
         col = combined[:, i]
 
         # 1) Standardization (None)
@@ -352,7 +360,6 @@ DEFAULT_PLOT_SIZE = (4, 3.8)
 DEFAULT_PLOT_FONT_SIZE = 9
 
 
-
 # TODO: 处理输入的类型问题
 class train_NN_network:
     def __init__(self,
@@ -360,9 +367,7 @@ class train_NN_network:
                  optimizer: torch.optim.Optimizer,
                  loss_function,  # with [Tensor(batch_size, Y_predict_dim), Tensor(batch_size, Y_known_dim)], return a total batch loss
                  scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-                 Xs=None,  # should be normalized
-                 Ys=None,  # should be normalized
-                 test_set_ratio: Optional[float] = None,
+
                  Xs_train=None,  # should be normalized
                  Ys_train=None,  # should be normalized
                  Xs_test=None,  # should be normalized
@@ -384,8 +389,8 @@ class train_NN_network:
                  save_path_stem="",
                  save_every_n_epoch=None,
                  save_by_geo_sequence=1.2,  # save when it's more than 10% more epoch than last save
-                 save_pngs = True,
-                 save_script = True,
+                 save_pngs=True,
+                 save_script=True,
 
                  ########## Print and Plot options ##########
                  print_every_n_epoch=200,
@@ -400,7 +405,7 @@ class train_NN_network:
                  plot_cases_names=None,
                  function_for_plot_test_cases=None,
                  # a callable to convert one X and one Y to two list of scalars, so that it can be plotted against the predicted value
-                 callback_function = None
+                 callback_function=None
                  ):
 
         print()
@@ -411,6 +416,7 @@ class train_NN_network:
             self.device = torch.device("cpu")
             if torch.cuda.is_available():
                 # Get the number of GPUs available
+                # TODO: for multiple GPUs
                 num_gpus = torch.cuda.device_count()
                 print(f"Using GPU {0}: {torch.cuda.get_device_name(0)}")
                 self.device = torch.device('cuda:0')
@@ -431,7 +437,7 @@ class train_NN_network:
             caller_frame = inspect.stack()[1]
             caller_full_path = os.path.abspath(caller_frame.filename)
             try:
-                dst_script_path = os.path.join(save_folder,filename_name(caller_full_path))
+                dst_script_path = os.path.join(save_folder, filename_name(caller_full_path))
                 os.makedirs(dst_script_path)
                 shutil.copy2(caller_full_path, dst_script_path)
                 print(f"Original script {caller_full_path} backed up to {dst_script_path}")
@@ -439,7 +445,6 @@ class train_NN_network:
                 traceback.print_exc()
                 print(e)
                 print(f"Warning: could not save script {caller_full_path} -> {save_path_stem}: {e}")
-
 
         self.model = model.to(self.device)
         self.optimizer = optimizer
@@ -476,20 +481,11 @@ class train_NN_network:
                                         x_axis_label="Input",
                                         y_axis_label="Output") for _ in range(len(self.plot_cases))]
 
-        all_windows = [self.linear_fit_window,self.loss_over_epoch_window]+self.plot_cases_windows
+        all_windows = [self.linear_fit_window, self.loss_over_epoch_window] + self.plot_cases_windows
         for window in all_windows:
             window.comrades = all_windows
 
-        if test_set_ratio is not None:
-            assert 0 < test_set_ratio < 1
-        assert bool(Xs and Ys and test_set_ratio is not None) != \
-               bool(len(Xs_train) and len(Ys_train) and len(Xs_test) and len(Ys_test)), \
-            "You should either provide unsplit dataset or split dataset."
-
-        if (Xs and Ys and test_set_ratio is not None):
-            self.Xs_train, self.Xs_test, self.Ys_train, self.Ys_test = train_test_split(Xs, Ys, test_size=test_set_ratio)
-        else:
-            self.Xs_train, self.Xs_test, self.Ys_train, self.Ys_test = Xs_train, Xs_test, Ys_train, Ys_test
+        self.Xs_train, self.Xs_test, self.Ys_train, self.Ys_test = Xs_train, Xs_test, Ys_train, Ys_test
 
         self.Xs_train = self.Xs_train.to(self.device)
         self.Ys_train = self.Ys_train.to(self.device)
@@ -611,7 +607,7 @@ class train_NN_network:
                         self.linear_fit_window.Curve_objects = curves
                         active_windows.append(self.linear_fit_window)
                         if self.save_pngs and self.save_this_epoch():
-                            self.linear_fit_window.save_png(self.save_path_stem + f"_Linear_Fit.{filename_text}.png",dpi=300)
+                            self.linear_fit_window.save_png(self.save_path_stem + f"_Linear_Fit.{filename_text}.png", dpi=300)
 
                 if self.plot_loss_over_epoch:
                     self.loss_over_epoch_window.set_figure_title(info_text)
@@ -621,7 +617,7 @@ class train_NN_network:
                         [Curve(curve_X, self.training_losses, curve_color=blue_color, Y_label="training loss"),
                          Curve(curve_X, self.test_losses, curve_color=red_color, Y_label="test loss")]
                     if self.save_pngs and self.save_this_epoch():
-                        self.loss_over_epoch_window.save_png(self.save_path_stem + f"_Losses.{filename_text}.png",dpi=300)
+                        self.loss_over_epoch_window.save_png(self.save_path_stem + f"_Losses.{filename_text}.png", dpi=300)
                     active_windows.append(self.loss_over_epoch_window)
 
                 if self.plot_cases:
@@ -654,7 +650,7 @@ class train_NN_network:
                         case_window.set_figure_title(
                             info_text + f" | {self.plot_cases_names[window_count]} Case {window_count + 1} | Loss {smart_format_float(example_loss, 4)}")
                         if self.save_pngs and self.save_this_epoch():
-                            case_window.save_png(self.save_path_stem + f"_Exfample.{filename_text}.png",dpi=300)
+                            case_window.save_png(self.save_path_stem + f"_Exfample.{filename_text}.png", dpi=300)
 
             for window_count, window in enumerate(active_windows):
                 window.shift_window = WINDOW_POSITIONS[len(active_windows)][window_count]
