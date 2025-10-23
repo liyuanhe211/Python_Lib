@@ -482,6 +482,10 @@ class ResizableLabel(QtWidgets.QLabel):
 
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.setMinimumHeight(30)
+        self.setMaximumHeight(60)
+        if not text:
+            self.setFixedHeight(0)
+
 
         # Base font setup
         self.base_font = QtGui.QFont("Arial", max_font_size)
