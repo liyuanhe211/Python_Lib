@@ -10,7 +10,9 @@ sys.path.insert(0, parent_path)
 
 from My_Lib import *
 from My_Lib_PyQt6 import *
-
+from My_Lib_Science import *
+import weakref
+import threading
 import numpy as np
 import scipy.optimize
 import matplotlib
@@ -492,7 +494,7 @@ class Curve:
 class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
     def __init__(
             self,
-            Curve_objects: Sequence[Curve] = None,
+            Curve_objects: Union[Curve, Sequence[Curve]] = None,
             x_axis_label="X",
             y_axis_label="Y",
             fig_size=(4, 3),
@@ -523,7 +525,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             parent=None,
             shift_window=(0, 0),
             # shift the window position like in a grid layout for x grid to the right and y grid down. The grid size is the current window size
-            multiple_plot_arrangement=None, # e.g. (3,8) means that the window should be positioned as if it is the 3rd window in a 8 windows grid.
+            multiple_plot_arrangement=None,  # e.g. (3,8) means that the window should be positioned as if it is the 3rd window in a 8 windows grid.
             figure_title="",
             window_title="Plot Points Window"
     ):
@@ -549,13 +551,14 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.y_tick_texts = y_tick_texts or []
         self.y2_tick_positions = y2_tick_positions or []
         self.y2_tick_texts = y2_tick_texts or []
+        self.y2_tick_texts = [str(x) for x in self.y2_tick_texts]
         self.y2_axis_label = y2_axis_label
         self.auto_color = auto_color
         self.chinese_font = use_chinese_font
         self.save_img_filepath = save_img_filepath
         self.save_img_dpi = save_img_dpi
-        self.current_location = (0,0)
-        self.comrades:List[QWidget] = []
+        self.current_location = (0, 0)
+        self.comrades: List[QWidget] = []
         if isinstance(shift_window, (int, float)):
             shift_window = (shift_window, 0)
         if multiple_plot_arrangement is not None:
@@ -569,7 +572,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.setStyleSheet("background-color: white;")
 
         layout = QtWidgets.QVBoxLayout(self)
-        self._fig = Figure(figsize=self.fig_size, dpi=100)
+        self._fig = Figure(figsize=self.fig_size, dpi=100, constrained_layout=True)
+        self._fig.set_constrained_layout_pads(w_pad=0.08, h_pad=0.08, hspace=0.08, wspace=0.08)
         self._canvas = FigureCanvas(self._fig)
         self._ax = self._fig.add_subplot(111)
 
@@ -596,12 +600,12 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.raise_button.setFont(raise_font)
         toolbar_height = self._toolbar.sizeHint().height()
         self.raise_button.setFixedSize(60, toolbar_height)
-        connect_once(self.raise_button,self.bring_to_front)
+        connect_once(self.raise_button, self.bring_to_front)
 
         # Add horizontal layout for the resizable label with left spacer
         label_layout = QtWidgets.QHBoxLayout()
         label_layout.addSpacing(50)  # horizontal left spacer
-        self.resizable_label = ResizableLabel(figure_title, self, font_size+1)
+        self.resizable_label = ResizableLabel(figure_title, self, font_size + 1)
 
         # self.resizable_label.setStyleSheet("background-color: #f00000;")
         label_layout.addWidget(self.resizable_label)
@@ -627,6 +631,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             plt.rcParams['font.family'] = prop.get_name()
 
         self._Curve_objects = []
+        if isinstance(Curve_objects, Curve):
+            Curve_objects = [Curve_objects]
         self.Curve_objects = Curve_objects if Curve_objects else []
 
         self.setWindowTitle(window_title)
@@ -634,6 +640,34 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             self.show()
             self.center_the_widget()
             self.move_window()
+
+    #     # 关键：检测是否无人引用
+    #     self._auto_pause_check()
+    #
+    # def _auto_pause_check(self):
+    #     """
+    #     检查Plot对象是否被外部引用，如果没有，就自动pause。
+    #     同时保持一个强引用，防止在pause期间被销毁。
+    #     """
+    #     import weakref, sys, threading
+    #
+    #     ref = weakref.ref(self)
+    #
+    #     def check_ref():
+    #         obj = ref()
+    #         if obj is not None:
+    #             ref_count = sys.getrefcount(obj)
+    #             # print("refcount", ref_count)
+    #             if ref_count <= 3:  # 没有外部变量引用
+    #                 # 临时保存强引用，防止垃圾回收
+    #                 Plot._temporary_ref = obj
+    #                 # 启动pause
+    #                 obj.pause()
+    #                 # pause退出后清除引用
+    #                 Plot._temporary_ref = None
+    #
+    #     # 延迟一点检查，等__init__栈释放
+    #     threading.Timer(0.05, check_ref).start()
 
     def bring_to_front(self):
         self.activateWindow()
@@ -645,7 +679,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         return self._shift_window
 
     @shift_window.setter
-    def shift_window(self,new_tuple):
+    def shift_window(self, new_tuple):
         self._shift_window = new_tuple
         self.move_window()
 
@@ -658,11 +692,11 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         x_centered = (screen_width - self.width()) // 2
         y_centered = (screen_height - self.height()) // 2
 
-        new_x_position = x_centered + self.shift_window[0] * (self.width()+3)
-        new_y_position = y_centered + self.shift_window[1] * (self.height()+30)
-        if (new_x_position,new_y_position)!=self.current_location:
+        new_x_position = x_centered + self.shift_window[0] * (self.width() + 3)
+        new_y_position = y_centered + self.shift_window[1] * (self.height() + 30)
+        if (new_x_position, new_y_position) != self.current_location:
             self.move(round(new_x_position), round(new_y_position))
-            self.current_location = (new_x_position,new_y_position)
+            self.current_location = (new_x_position, new_y_position)
 
     @property
     def Curve_objects(self):
@@ -892,7 +926,13 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self._fig.canvas.mpl_connect('button_press_event', on_mouse_click)
 
         # Tight layout and draw
-        self._fig.tight_layout()
+        # self._fig.subplots_adjust(
+        #     left=0.15,
+        #     right=0.97,
+        #     top=0.97,
+        #     bottom=0.15
+        # )
+        # self._fig.tight_layout()
         self._canvas.draw()
 
         if self.save_img_filepath:
@@ -1211,24 +1251,26 @@ def nonlinear_model_fit(model, X, Y, initial_guesses, variable_names=None, Y_unc
             print(variable, ':', print_float_and_stderr(opt_values[count], std_errs[count], sig_digits=3))
 
     # print("IC50: ","{:.2f}, 95% CI ({:.2f}-{:.2f})".format(10**opt_values[0], 10**(opt_values[0]-std_errs[0]*2), 10**(opt_values[0]+std_errs[0]*2)))
-
+    ret_plot = None
     if show_plot:
-        dot = Curve(X=X, Y=Y, plot_dot=True, dot_format=point_mkr, dot_width=3, plot_curve=False, dot_color=blue_color)
+        dot = Curve(X=X, Y=Y, plot_dot=True, dot_format=point_mkr, dot_width=5, plot_curve=False, dot_color=blue_color)
         # 去掉第一个和最后一点，防止interp1d超限
         curve = Curve(X=X, curve_color=red_color, fitted_function=lambda x: model(x, *opt_values))
 
-        Plot([dot, curve],
-             plot_legend=False,
-             x_axis_label=x_axis_label,
-             y_axis_label=y_axis_label,
-             # non_blocking=True
-             # x_lim=(0, None),
-             # y_lim=(curve.interp1d(0), None),
-             # x_log=True
-             # y_log=True
-             )
+        ret_plot = Plot([dot, curve],
+                        plot_legend=False,
+                        x_axis_label=x_axis_label,
+                        y_axis_label=y_axis_label,
+                        font_size=10
+                        # non_blocking=True
+                        # x_lim=(0, None),
+                        # y_lim=(curve.interp1d(0), None),
+                        # x_log=True
+                        # y_log=True
+                        )
+        ret_plot.pause()
 
-    return opt_values
+    return opt_values, ret_plot
 
 
 def numerical_derivative(model: Callable, params: Sequence, param_perturbations: Sequence, x: float, x_perturbation=0):
@@ -1370,7 +1412,7 @@ def regression_on_UVI_over_distance(input_X, input_Y):
 
 def sum_of_multiple_Gaussians(x, *parameters):
     assert len(parameters) % 3 == 0
-    if not isinstance(x,np.ndarray):
+    if not isinstance(x, np.ndarray):
         x = np.array(x)
     ret = 0
     for parameter_index in range(0, len(parameters), 3):
@@ -1419,7 +1461,7 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
                                               lower_bounds=(0, X_lower_bound - wavelength_bound_relax, min_sigma),
                                               upper_bounds=(Y_upper_bound * intensity_bound,
                                                             X_upper_bound + wavelength_bound_relax,
-                                                           max_sigma),
+                                                            max_sigma),
                                               show_plot=False, print_result=False)
 
         try:
@@ -1432,7 +1474,7 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
                                                              max_sigma] * num_Gaussian,
                                                print_result=False, show_plot=False)
         except RuntimeError as _:  # 没有拟合出来
-            print("Stopped after fitting",num_Gaussian,"Gaussians.")
+            print("Stopped after fitting", num_Gaussian, "Gaussians.")
             break
 
         ret.append(list(all_gaussian.tolist()))

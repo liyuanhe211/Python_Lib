@@ -8,6 +8,7 @@ Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
 sys.path.append(Python_Lib_path)
 from My_Lib_Stock import *
 from scipy.interpolate import interp1d, splrep, splev
+from scipy.integrate import odeint
 from statistics import mean
 from itertools import groupby
 
@@ -15,6 +16,25 @@ from itertools import groupby
 def set_matplotlib_backend():
     import matplotlib
     matplotlib.use("TkAgg")
+
+
+# Just a backward compatibility wrapper to adapt for a previous-self-written ODE solver
+def SciPy_ODE_Solver(X,
+                     Y0,
+                     Y_to_dydt_function,
+                     *args,
+                     **options):
+    """
+
+    :param X:
+    :param Y0:
+    :param Y_to_dydt_function: a function, given (Yt, x, *args), return [dy1/dt, dy2/dt...]
+    :param args:
+    :param options:
+    :return: Ys
+    """
+    Ys = odeint(Y_to_dydt_function, Y0, X, args=args, **options)
+    return Ys
 
 
 def interpolation_with_grouping(Xs, Ys, kind, smoothing=None):
