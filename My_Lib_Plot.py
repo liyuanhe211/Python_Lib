@@ -12,6 +12,7 @@ from My_Lib import *
 from My_Lib_PyQt6 import *
 from My_Lib_Science import *
 import weakref
+import csv
 import threading
 import numpy as np
 import scipy.optimize
@@ -534,6 +535,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
         super(self.__class__, self).__init__()
 
+        self.current_title = figure_title
         self.x_axis_label = x_axis_label
         self.y_axis_label = y_axis_label
         self.fig_size = fig_size
@@ -712,7 +714,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.move_window()
 
     def set_figure_title(self, title):
-        self.resizable_label.setText(str(title))
+        self.current_title = str(title)
+        self.resizable_label.setText(self.current_title)
         # if not title.strip():
         #     self.resizable_label.hide()
         # else:
@@ -926,12 +929,12 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self._fig.canvas.mpl_connect('button_press_event', on_mouse_click)
 
         # Tight layout and draw
-        # self._fig.subplots_adjust(
-        #     left=0.15,
-        #     right=0.97,
-        #     top=0.97,
-        #     bottom=0.15
-        # )
+        self._fig.subplots_adjust(
+            left=0.15,
+            right=0.95,
+            top=0.95,
+            bottom=0.15
+        )
         # self._fig.tight_layout()
         self._canvas.draw()
 
@@ -940,12 +943,90 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
         update_UI()
 
-    def save_png(self, output_filename, dpi=None):
+    def save_csv(self, output_filename):
+        try:
+            csv_folder = os.path.join(filename_parent(output_filename), "Numeric_Plot_Data")
+            os.makedirs(csv_folder, exist_ok=True)
+            csv_path = os.path.join(csv_folder, filename_stem(output_filename) + ".csv")
+
+            data_columns = []
+            headers = []
+            max_len = 0
+
+            for i, curve in enumerate(self.Curve_objects):
+                # Use original data
+                xs = list(curve.Xs)
+                ys = list(curve.Ys)
+
+                max_len = max(len(xs), max_len)
+
+                data_columns.append(xs)
+                data_columns.append(ys)
+
+                # Try to get a label
+                label = curve.Y_label if curve.Y_label else f"Curve_{i + 1}"
+                headers.append(f"{label}_X")
+                headers.append(f"{label}_Y")
+
+            with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+
+                for i in range(max_len):
+                    row = []
+                    for col in data_columns:
+                        if i < len(col):
+                            row.append(col[i])
+                        else:
+                            row.append("")
+                    writer.writerow(row)
+
+        except Exception as e:
+            print(f"Error saving numeric data: {e}")
+
+    def save_png(self, output_filename, dpi=None, bbox_inches="tight"):
+        """
+        Save the current plot as a PNG file.
+        Also saves the numerical data of the curves to a CSV file in a 'Numeric_Plot_Data' subfolder.
+        If the plot has a title, it logs the title and filename to '0_Plot_Infos.txt'.
+
+        :param output_filename: The path to save the PNG file.
+        :param dpi: The resolution in dots per inch. If None, uses self.save_img_dpi.
+        :param bbox_inches: Bounding box in inches: 'tight' or None.
+        """
         dpi = dpi or self.save_img_dpi
-        self._fig.savefig(output_filename, dpi=dpi, bbox_inches="tight")
+        self._fig.savefig(output_filename, dpi=dpi, bbox_inches=bbox_inches)
+
+        self.save_csv(output_filename)
+
+        if hasattr(self, 'current_title') and self.current_title:
+            try:
+                folder = os.path.dirname(output_filename)
+                filename = os.path.basename(output_filename)
+                
+                if not hasattr(self, 'log_filenames'):
+                    self.log_filenames = {}
+                
+                if folder not in self.log_filenames:
+                    base_log = os.path.join(folder, "0_Plot_Infos.txt")
+                    self.log_filenames[folder] = get_unused_filename(base_log)
+                
+                log_file = self.log_filenames[folder]
+
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"{self.current_title}\t{filename}\n")
+            except Exception as e:
+                print(f"Error logging PNG title: {e}")
 
     def save_svg(self, output_filename):
+        """
+        Save the current plot as a SVG file.
+        Also saves the numerical data of the curves to a CSV file in a 'Numeric_Plot_Data' subfolder.
+
+        :param output_filename: The path to save the SVG file.
+        """
         self._fig.savefig(output_filename, bbox_inches="tight")
+        self.save_csv(output_filename)
 
 
 def integrate_discrete_points(x_values, y_values, start_range, end_range):
