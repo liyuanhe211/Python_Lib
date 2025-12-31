@@ -49,6 +49,5 @@ def process_is_CPU_idle(pid,interval=1):
     except psutil.NoSuchProcess:
         return None
 
-    
 if __name__ == '__main__':
     pass

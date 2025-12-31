@@ -13,6 +13,7 @@ import datetime
 import csv
 import json
 from datetime import datetime, timedelta
+import inspect
 import random
 import subprocess
 import collections
@@ -585,45 +586,6 @@ def remove_special_chr_from_str(input_str):
     else:
         ret = input_str
     return ret
-
-
-def get_unused_filename(input_filename, replace_hash=True, use_proper_filename=True):
-    """
-    verify whether the filename is already exist, if it is, a filename like filename_01.append; filename_02.append will be returned.
-    maximum 99 files can be generated
-    :param input_filename:
-    :param replace_hash
-    :param use_proper_filename
-    :return: a filename
-    """
-
-    input_filename = os.path.realpath(input_filename)
-
-    if use_proper_filename:
-        input_filename = proper_filename(input_filename, replace_hash=replace_hash)
-
-    if not os.path.isfile(input_filename) and not os.path.isdir(input_filename):
-        # 是新的
-        return input_filename
-    else:
-        if os.path.isfile(input_filename):
-            no_append = filename_class(input_filename).only_remove_append
-            append = filename_class(input_filename).append
-        else:
-            no_append = input_filename
-            append = ""
-
-        number = 1
-        ret = no_append + "_" + '{:0>2}'.format(number) + (('.' + append) if append else "")
-        while os.path.isfile(ret) or os.path.isdir(ret):
-            number += 1
-            if number == 9999:
-                Qt.QMessageBox.critical(None, "YOU HAVE 9999 INPUT FILE?!", "AND YOU DON'T CLEAN IT?!",
-                                        Qt.QMessageBox.Ok)
-                break
-            ret = no_append + "_" + '{:0>2}'.format(number) + (('.' + append) if append else "")
-
-        return ret
 
 
 def average(data, convert_to_arith_function=lambda x: x, convert_back_function=lambda x: x):
@@ -1258,7 +1220,13 @@ def print_float_and_stderr(value, stderr, sig_digits=2):
         return str(value) + " ± " + str(stderr)
 
 
-def print_time_difference(elapsed_seconds):
+def print_time_difference(elapsed_seconds, width=8):
+    """
+    
+    :param elapsed_seconds: 
+    :param width: Set the string width, set 0 to disable
+    """
+
     hours, remainder = divmod(elapsed_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     seconds = math.ceil(seconds)
@@ -1266,8 +1234,43 @@ def print_time_difference(elapsed_seconds):
     hours = int(hours)
 
     if elapsed_seconds < 3600:  # < 1 hour → XX:XX
-        return f"{minutes}:{seconds:02}".rjust(8)
+        return f"{minutes}:{seconds:02}".rjust(width)
     elif elapsed_seconds < 36000:  # < 10 hours → X:XX:XX
-        return f"{hours}:{minutes:02}:{seconds:02}".rjust(8)
+        return f"{hours}:{minutes:02}:{seconds:02}".rjust(width)
     else:  # >= 10 hours → XX:XX:XX
-        return f"{hours:02}:{minutes:02}:{seconds:02}".rjust(8)
+        return f"{hours:02}:{minutes:02}:{seconds:02}".rjust(width)
+
+
+class DualPrint:
+    def __init__(self, original_stdout, filename):
+        self.original_stdout = original_stdout
+        self.log_file = open(filename, 'a', encoding='utf-8')
+
+    def write(self, message):
+        self.original_stdout.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+
+    def flush(self):
+        self.original_stdout.flush()
+        self.log_file.flush()
+
+    def set_file(self, filename):
+        if not self.log_file.closed:
+            self.log_file.close()
+        self.log_file = open(filename, 'a', encoding='utf-8')
+
+
+def enable_dual_print(filename=None):
+    if filename is None:
+        caller_frame = inspect.stack()[1]
+        caller_filename = caller_frame.filename
+        filename = str(pathlib.Path(caller_filename).with_suffix('.txt'))
+
+    filename = get_unused_filename(filename)
+
+    if isinstance(sys.stdout, DualPrint):
+        sys.stdout.set_file(filename)
+    else:
+        sys.stdout = DualPrint(sys.stdout, filename)
+
