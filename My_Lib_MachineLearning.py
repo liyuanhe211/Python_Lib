@@ -45,6 +45,13 @@ from sklearn.metrics import mean_squared_error, r2_score
 from Python_Lib.My_Lib import *
 from Python_Lib.My_Lib_Plot import *
 from Python_Lib.My_Lib_Office import *
+from Python_Lib.My_Lib_MachineLearning_Models_Public import *
+
+try:
+    from Python_Lib.My_Lib_MachineLearning_Models_Private import *
+except ImportError:
+    print("Using only public models in Python_Lib.")
+
 
 # Set matplotlib backend (should be done before importing pyplot)
 matplotlib.use("QtAgg")
@@ -368,10 +375,10 @@ class train_NN_network:
                  loss_function,  # with [Tensor(batch_size, Y_predict_dim), Tensor(batch_size, Y_known_dim)], return a total batch loss
                  scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
 
-                 Xs_train=None,  # should be normalized
-                 Ys_train=None,  # should be normalized
-                 Xs_test=None,  # should be normalized
-                 Ys_test=None,  # should be normalized
+                 Xs_train: Optional[torch.Tensor] = None,  # should be normalized
+                 Ys_train: Optional[torch.Tensor] = None,  # should be normalized
+                 Xs_test: Optional[torch.Tensor] = None,  # should be normalized
+                 Ys_test: Optional[torch.Tensor] = None,  # should be normalized
                  batch_size=None,  # None for Everything as one batch
 
                  ########## Optimization helpers ##########
@@ -388,15 +395,15 @@ class train_NN_network:
                  load_from_save_path=None,
                  save_path_stem="",
                  save_every_n_epoch=None,
-                 save_by_geo_sequence=1.2,  # save when it's more than 10% more epoch than last save
+                 save_by_geo_sequence=1.02,  # save when it's more than 10% more epoch than last save
                  save_pngs=True,
                  save_script=True,
 
                  ########## Print and Plot options ##########
                  print_every_n_epoch=200,
-                 print_by_geo_sequence=1.01,
+                 print_by_geo_sequence=1.005,
                  plot_every_n_epoch=200,
-                 plot_by_geo_sequence=1.01,
+                 plot_by_geo_sequence=1.005,
                  plot_current_linear_fit=True,
                  plot_loss_over_epoch=True,
                  function_for_numerical_evaluation=None,
@@ -405,7 +412,9 @@ class train_NN_network:
                  plot_cases_names=None,
                  function_for_plot_test_cases=None,
                  # a callable to convert one X and one Y to two list of scalars, so that it can be plotted against the predicted value
-                 callback_function=None
+                 callback_function=None,
+                 non_opt_evaluation_functions=None,
+                 non_opt_evaluation_function_names=None
                  ):
 
         print()
@@ -432,6 +441,9 @@ class train_NN_network:
             save_folder = os.path.join(save_folder, f"{caller_filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             os.makedirs(save_folder)
             save_path_stem = os.path.join(save_folder, "Save")
+        else:
+            save_folder = os.path.dirname(save_path_stem)
+
         if save_script:
             # Save the caller script in the checkpoint folder
             caller_frame = inspect.stack()[1]
@@ -465,6 +477,10 @@ class train_NN_network:
         self.plot_cases_names = plot_cases_names or []
         self.function_for_plot_one_test = function_for_plot_test_cases
         self.callback_function = callback_function
+        self.non_opt_evaluation_functions = non_opt_evaluation_functions or []
+        self.non_opt_evaluation_function_names = non_opt_evaluation_function_names or []
+        if len(self.non_opt_evaluation_functions) != len(self.non_opt_evaluation_function_names):
+            self.non_opt_evaluation_function_names = [f"Eval {i + 1}" for i in range(len(self.non_opt_evaluation_functions))]
 
         self.linear_fit_window = Plot(fig_size=DEFAULT_PLOT_SIZE,
                                       font_size=10,
@@ -476,12 +492,18 @@ class train_NN_network:
                                            x_axis_label="Epoch",
                                            y_axis_label="Loss")
 
+        self.evaluation_over_epoch_windows = [Plot(fig_size=DEFAULT_PLOT_SIZE,
+                                                   font_size=DEFAULT_PLOT_FONT_SIZE,
+                                                   x_axis_label="Epoch",
+                                                   y_axis_label=name)
+                                              for name in self.non_opt_evaluation_function_names]
+
         self.plot_cases_windows = [Plot(fig_size=DEFAULT_PLOT_SIZE,
                                         font_size=DEFAULT_PLOT_FONT_SIZE,
                                         x_axis_label="Input",
                                         y_axis_label="Output") for _ in range(len(self.plot_cases))]
 
-        all_windows = [self.linear_fit_window, self.loss_over_epoch_window] + self.plot_cases_windows
+        all_windows = [self.linear_fit_window, self.loss_over_epoch_window] + self.plot_cases_windows + self.evaluation_over_epoch_windows
         for window in all_windows:
             window.comrades = all_windows
 
@@ -505,6 +527,8 @@ class train_NN_network:
 
         self.training_losses = []
         self.test_losses = []
+        self.training_evaluations_history = [[] for _ in range(len(self.non_opt_evaluation_functions))]
+        self.test_evaluations_history = [[] for _ in range(len(self.non_opt_evaluation_functions))]
         self.last_save_epoch = 0
         self.last_print_epoch = 0
         self.last_plot_epoch = 0
@@ -513,6 +537,7 @@ class train_NN_network:
         while self.epoch <= self.max_epoch:
             ############ Training loop ############
             self.training_loss = 0.
+            current_epoch_training_evaluations = [0.0] * len(self.non_opt_evaluation_functions)
             for X_train_batch, Y_train_batch in batched_X_train_Y_train:
                 X_train_batch = X_train_batch.to(self.device)
                 Y_train_batch = Y_train_batch.to(self.device)
@@ -520,12 +545,25 @@ class train_NN_network:
                 self.optimizer.zero_grad()
                 Y_predict_train_batch = self.model(X_train_batch)
                 batch_loss = self.loss_function(Y_predict_train_batch, Y_train_batch)
+
+                # Evaluation
+                with torch.no_grad():
+                    for i, func in enumerate(self.non_opt_evaluation_functions):
+                        val = func(Y_predict_train_batch, Y_train_batch)
+                        if isinstance(val, torch.Tensor):
+                            val = val.item()
+                        current_epoch_training_evaluations[i] += val
+
                 self.training_loss += batch_loss.item()
                 batch_loss.backward()
                 if max_gradient_norm:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_gradient_norm)
                 self.optimizer.step()
             self.training_loss /= len(batched_X_train_Y_train)
+            for i in range(len(current_epoch_training_evaluations)):
+                current_epoch_training_evaluations[i] /= len(batched_X_train_Y_train)
+                self.training_evaluations_history[i].append(current_epoch_training_evaluations[i])
+
             if self.scheduler is not None:
                 self.scheduler.step()
             self.training_losses.append(self.training_loss)
@@ -554,23 +592,39 @@ class train_NN_network:
             Ys_predict_test: torch.Tensor = self.model(self.Xs_test)
             test_loss = self.loss_function(Ys_predict_test, self.Ys_test).item()
             self.test_losses.append(test_loss)
+
+            # Evaluation
+            current_test_evals = []
+            for i, func in enumerate(self.non_opt_evaluation_functions):
+                val = func(Ys_predict_test, self.Ys_test)
+                if isinstance(val, torch.Tensor):
+                    val = val.item()
+                self.test_evaluations_history[i].append(val)
+                current_test_evals.append(val)
+
             info_text = f"Epoch {str(self.epoch).rjust(len(str(self.max_epoch)))}/{self.max_epoch} | "
-            info_text += f"Loss {smart_format_float(self.training_losses[-1], 4):>8}/{smart_format_float(test_loss, 4):<8}"
-            filename_text = f"{self.epoch}_{smart_format_float(self.training_losses[-1], 4)}_{smart_format_float(test_loss, 4)}"
+            info_text += f"Loss{smart_format_float(self.training_losses[-1], 4):>7}/{smart_format_float(test_loss, 4):<7}"
+
+            for name, train_val, test_val in zip(self.non_opt_evaluation_function_names,
+                                                 [h[-1] for h in self.training_evaluations_history],
+                                                 current_test_evals):
+                info_text += f"| {name} {smart_format_float(train_val, 4):>7}/{smart_format_float(test_val, 4):<7}"
+
+            filename_text = f"{self.epoch:0>5.0f}_{smart_format_float(self.training_losses[-1], 4)}_{smart_format_float(test_loss, 4)}"
 
             ############ Printing ############
-            if self.print_this_epoch():
-                print_elapsed_time = print_time_difference(time.time() - self.training_start_time)
+            if self.should_print_this_epoch():
+                print_elapsed_time = print_time_difference(time.time() - self.training_start_time, width=0)
                 print_training_speed_epochs = 10 ** (int(math.log10(self.epoch / 10)))
                 print_training_speed_epochs = max(print_training_speed_epochs, 1)
                 print_training_speed = (time.time() - self.training_start_time) / self.epoch * print_training_speed_epochs
-                print_training_speed = f"{print_time_difference(print_training_speed)} for every {print_training_speed_epochs} Epoch"
+                print_training_speed = f"{print_time_difference(print_training_speed, width=0)}/{print_training_speed_epochs} Epoch{'s' if print_training_speed_epochs > 1 else ''}"
 
                 print(f"{info_text} | Time: {print_elapsed_time} | {print_training_speed}")
 
             ############ Plotting ############
             active_windows: List[Plot] = []
-            if self.plot_this_epoch():
+            if self.should_plot_this_epoch():
                 if self.plot_current_linear_fit:
                     self.linear_fit_window.set_window_title(f"Current Linear Fit @ Epoch {self.epoch}")
                     self.linear_fit_window.set_figure_title(info_text)
@@ -606,8 +660,8 @@ class train_NN_network:
                         curves.append(Curve([linear_range_min, linear_range_max], [linear_range_min, linear_range_max], curve_color="#BBBBBB"))
                         self.linear_fit_window.Curve_objects = curves
                         active_windows.append(self.linear_fit_window)
-                        if self.save_pngs and self.save_this_epoch():
-                            self.linear_fit_window.save_png(self.save_path_stem + f"_Linear_Fit.{filename_text}.png", dpi=300)
+                        if self.save_pngs and self.should_save_this_epoch():
+                            self.linear_fit_window.save_png(self.save_path_stem + f"_Linear_Fit.{filename_text}.png", dpi=300, bbox_inches=None)
 
                 if self.plot_loss_over_epoch:
                     self.loss_over_epoch_window.set_figure_title(info_text)
@@ -616,9 +670,22 @@ class train_NN_network:
                     self.loss_over_epoch_window.Curve_objects = \
                         [Curve(curve_X, self.training_losses, curve_color=blue_color, Y_label="training loss"),
                          Curve(curve_X, self.test_losses, curve_color=red_color, Y_label="test loss")]
-                    if self.save_pngs and self.save_this_epoch():
-                        self.loss_over_epoch_window.save_png(self.save_path_stem + f"_Losses.{filename_text}.png", dpi=300)
+                    if self.save_pngs and self.should_save_this_epoch():
+                        self.loss_over_epoch_window.save_png(self.save_path_stem + f"_0Losses.png", dpi=300, bbox_inches=None)
                     active_windows.append(self.loss_over_epoch_window)
+
+                # New Evaluation Windows
+                curve_X = list(range(self.epoch))
+                for i, window in enumerate(self.evaluation_over_epoch_windows):
+                    window.set_figure_title(info_text)
+                    window.set_window_title(f"{self.non_opt_evaluation_function_names[i]} over Epoch @ Epoch {self.epoch}")
+                    window.Curve_objects = [
+                        Curve(curve_X, self.training_evaluations_history[i], curve_color=blue_color, Y_label="training"),
+                        Curve(curve_X, self.test_evaluations_history[i], curve_color=red_color, Y_label="test")
+                    ]
+                    if self.save_pngs and self.should_save_this_epoch():
+                        window.save_png(self.save_path_stem + f"_0Eval_{self.non_opt_evaluation_function_names[i]}.png", dpi=300, bbox_inches=None)
+                    active_windows.append(window)
 
                 if self.plot_cases:
                     for window_count, (case_data, case_window) in enumerate(zip(self.plot_cases, self.plot_cases_windows)):
@@ -649,26 +716,29 @@ class train_NN_network:
                         example_loss = self.loss_function(output_predicted.unsqueeze(0), output_known.unsqueeze(0)).item()
                         case_window.set_figure_title(
                             info_text + f" | {self.plot_cases_names[window_count]} Case {window_count + 1} | Loss {smart_format_float(example_loss, 4)}")
-                        if self.save_pngs and self.save_this_epoch():
-                            case_window.save_png(self.save_path_stem + f"_Exfample.{filename_text}.png", dpi=300)
+                        if self.save_pngs and self.should_save_this_epoch():
+                            case_window.save_png(self.save_path_stem + f"_Example.{filename_text}.png", dpi=300, bbox_inches=None)
 
             for window_count, window in enumerate(active_windows):
                 window.shift_window = WINDOW_POSITIONS[len(active_windows)][window_count]
 
-            if self.save_this_epoch():
+            if self.should_save_this_epoch():
                 save_object = {'epoch': self.epoch,
                                'model_state_dict': self.model.state_dict(),
                                'optimizer_state_dict': self.optimizer.state_dict(),
                                'training_losses': self.training_losses,
                                'test_losses': self.test_losses}
-                save_path = self.save_path_stem + f".Epoch_{self.epoch}.pth"
+                save_path = self.save_path_stem + f".Epoch_{self.epoch:0>5.0f}.pth"
                 torch.save(save_object, save_path)
 
         self.model.train()
 
         return test_loss
 
-    def save_this_epoch(self):
+    def should_save_this_epoch(self):
+        if self.epoch == self.max_epoch:
+            self.last_save_epoch = self.epoch
+            return True
         if not self.last_save_epoch and self.epoch <= 1:
             self.last_save_epoch = 1
             return True
@@ -679,7 +749,10 @@ class train_NN_network:
             return True
         return False
 
-    def print_this_epoch(self):
+    def should_print_this_epoch(self):
+        if self.epoch == self.max_epoch:
+            self.last_print_epoch = self.epoch
+            return True
         if not self.last_print_epoch and self.epoch <= 1:
             self.last_print_epoch = 1
             return True
@@ -690,7 +763,10 @@ class train_NN_network:
             return True
         return False
 
-    def plot_this_epoch(self):
+    def should_plot_this_epoch(self):
+        if self.epoch == self.max_epoch:
+            self.last_plot_epoch = self.epoch
+            return True
         if not self.last_plot_epoch and self.epoch <= 1:
             self.last_plot_epoch = 1
             return True
