@@ -110,10 +110,12 @@ def smart_format_float(num, precision=3, scientific_notation_limit=5):
         if abs(num) < 1:
             digits_left += 1
         rounded = round(num, digits_left)
-        return '{:.{}f}'.format(rounded, max(0, digits_left))
+        return ("-" if neg else "") + '{:.{}f}'.format(rounded, max(0, digits_left))
 
     return ("-" if neg else "") + ("{:." + str(precision - 1) + "e}").format(num).replace("e-0", ' × 10^-').replace("e-", ' × 10^-')
 
+# print("\n\n")
+# print(smart_format_float(-4.1))
 
 # smart_format_float_tests = [(2.77E13, "2.77 × 10^13"),
 #                             (2.778E13, "2.78 × 10^13"),
