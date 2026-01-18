@@ -422,8 +422,181 @@ class Batch_Sampler_by_Tag(torch.utils.data.Sampler):
         return (len(self.tags) + self.batch_size - 1) // self.batch_size
 
 
+
+class Multitask_Strategy:
+    Uncertainty_Weighted_Loss = "Uncertainty_Weighted_Loss_2093hm8204gh974g029f7h398fm12089fh2907tgrg"
+    GradNorm = "GradNorm_03q984gh0398hg98whmf028934fmxisfuvhn9340gh2937fh9w8df"
+
+
+class GradNorm_Manager(nn.Module):
+    """
+    GradNorm: <Gradient Normalization for Adaptive Loss Balancing in Deep Multitask Networks (ICML 2018)>
+    利用反向传播的梯度幅度来动态调整权重。引入了损失函数L_grad更新任务权重。
+    Computes the gradient norm $G_i$ for each task $i$'s loss with respect to the shared layer weights
+    A metric $r_i(t) = \tilde{L}_i(t) / \tilde{L}_i(0)$ is defined, 
+        where $\tilde{L}_i(t)$ represents the current loss,
+        and $\tilde{L}_i(0)$ the initial loss. 
+        This ratio quantifies the task's optimization progress relative to its initial state.
+    The algorithm calculates the average gradient norm across all tasks, denoted as $\bar{G}$. 
+        The target gradient norm for each task is established as 
+        $\bar{G} \times [r_i(t)]^\alpha$ (where $\alpha$ is a hyperparameter). 
+        Consequently, tasks with slower loss reduction (a higher $r_i$) are assigned a larger target gradient, 
+        thereby necessitating a higher weight.
+    Task weights $w_i$ are updated by minimizing the function $L_{grad} = \sum_i |G_i - G_{target}^{(i)}|_1$.
+    """
+
+    def __init__(self, n_tasks, model: nn.Module, device, alpha=3, lr=0.1):
+        super().__init__()
+        self.n_tasks = n_tasks
+        self.model = model
+        self.device = device
+        self.alpha = alpha
+        
+        # weights_param: Weights for each task, initialized to 1.0 (learnable)
+        self.weights_param = torch.ones(n_tasks, dtype=torch.float32, device=device, requires_grad=True)
+        
+        # Separate optimizer for weights
+        self.weights_optim = torch.optim.Adam([self.weights_param], lr=lr) 
+        
+        self.initial_losses = None
+        self.is_initialized = False # Initialize based on first batch
+        self.shared_weights = None 
+        
+        # Public attributes for logging (matching Uncertainty_Weighted_Loss interface)
+        self.loss_terms = [] 
+        self.weights = [] 
+        
+        self.current_step_losses = [] 
+
+    def forward(self, *losses):
+        """
+        Receives individual task losses.
+        Returns the weighted sum for the main model update.
+        """
+        self.current_step_losses = list(losses)
+
+        # Initialization: Scale weights so that w_i * L_i is roughly constant and sum(w_i) = 1
+        if self.training and not self.is_initialized:
+            with torch.no_grad():
+                loss_vals = torch.tensor([l.item() for l in losses], device=self.device, dtype=torch.float32)
+                # Avoid division by zero
+                safe_loss_vals = loss_vals.clone()
+                safe_loss_vals[safe_loss_vals < 1e-8] = 1e-8
+                
+                # We want w_i * L_i = k (constant)
+                # w_i = k / L_i
+                # sum(w_i) = 1  => sum(k/L_i) = 1 => k * sum(1/L_i) = 1 => k = 1 / sum(1/L_i)
+                inv_losses = 1.0 / safe_loss_vals
+                total_inv = inv_losses.sum()
+                
+                if total_inv > 0:
+                    new_weights = inv_losses / total_inv
+                    self.weights_param.data.copy_(new_weights)
+                    print("GradNorm: Initialized weights to balance loss magnitudes (sum=1).")
+                    print(f"  Losses: {loss_vals.cpu().numpy()}")
+                    print(f"  Weights: {self.weights_param.data.cpu().numpy()}")
+                    print(f"  Weighted Losses: {(loss_vals * self.weights_param.data).cpu().numpy()}")
+                
+                # Also set initial losses here as this is the "initial" state
+                self.initial_losses = torch.tensor([l.item() for l in losses], device=self.device)
+                
+                self.is_initialized = True
+        
+        # Log values
+        self.loss_terms = [l.item() for l in losses]
+        self.weights = [w.item() for w in self.weights_param]
+        
+        # Calculate weighted loss
+        # Use detached weights for the main loss so main model doesn't optimize w_i
+        total_loss = sum(w * l for w, l in zip(self.weights_param.detach(), losses))
+        
+        return total_loss
+
+    def backward_and_step(self, total_loss):
+        """
+        Performs backward pass on total_loss (updating main model grads)
+        AND performs GradNorm update on self.weights.
+        """
+        # 1. Backward pass for the main model
+        total_loss.backward(retain_graph=True)
+        
+        # 2. Identify shared layer (if not already found)
+        if self.shared_weights is None:
+            self.find_shared_weights()
+            if self.shared_weights is None:
+                return 
+
+        # 3. GradNorm Update
+        norms = []
+        for loss in self.current_step_losses:
+            # Calculate grad(L_i, W)
+            g_tuple = torch.autograd.grad(loss, self.shared_weights, retain_graph=True, allow_unused=True)
+            g = g_tuple[0]
+            if g is None:
+                norms.append(torch.tensor(0.0, device=self.device))
+            else:
+                norms.append(torch.norm(g))
+        norms = torch.stack(norms)
+
+        if self.initial_losses is None:
+            self.initial_losses = torch.tensor([l.item() for l in self.current_step_losses], device=self.device)
+            # Prevent division by zero
+            self.initial_losses[self.initial_losses < 1e-8] = 1.0
+
+        current_loss_vals = torch.tensor([l.item() for l in self.current_step_losses], device=self.device)
+        loss_ratios = current_loss_vals / self.initial_losses
+        
+        avg_ratio = loss_ratios.mean()
+        inverse_training_rates = loss_ratios / (avg_ratio + 1e-8)
+        
+        # Target norms
+        weighted_norms = norms * self.weights_param.detach()
+        mean_weighted_norm = weighted_norms.mean()
+        
+        target_norms = mean_weighted_norm * (inverse_training_rates ** self.alpha)
+        target_norms = target_norms.detach()
+        
+        # L_grad = sum | w_i * ||grad L_i|| - target |
+        l_grad = torch.nn.functional.l1_loss(self.weights_param * norms, target_norms)
+        
+        self.weights_optim.zero_grad()
+        l_grad.backward()
+        self.weights_optim.step()
+        
+        # Renormalize weights
+        with torch.no_grad():
+            normalize_coeff = 1.0 / (self.weights_param.sum() + 1e-8)
+            self.weights_param.data = self.weights_param.data * normalize_coeff
+
+    def find_shared_weights(self):
+        candidate_params = list(self.model.parameters())
+        common_ids = set(id(p) for p in candidate_params)
+        
+        for loss in self.current_step_losses:
+            grads = torch.autograd.grad(loss, candidate_params, retain_graph=True, allow_unused=True)
+            active_ids = {id(p) for p, g in zip(candidate_params, grads) if g is not None}
+            common_ids &= active_ids
+            
+        if not common_ids:
+            print("GradNorm Warning: No common parameters found for all tasks. GradNorm disabled.")
+            return
+
+        final_shared_param = None
+        for p in reversed(candidate_params):
+            if id(p) in common_ids:
+                if p.dim() > 1: 
+                     final_shared_param = p
+                     break
+                elif final_shared_param is None: 
+                     final_shared_param = p
+        
+        if final_shared_param is not None:
+             print(f"GradNorm: Auto-detected shared layer parameter with shape {final_shared_param.shape}")
+             self.shared_weights = final_shared_param
+
+
 # TODO: 处理输入的类型问题
-class train_NN_network:
+class Train_NN_Network:
     def __init__(self,
                  model: nn.Module,
                  optimizer: torch.optim.Optimizer,
@@ -437,6 +610,11 @@ class train_NN_network:
                  #    Then Automatic Weighted Loss will be applied to balance the multiple objectives
                  #    With the additional parameter eta[i] added for each loss function and are optimized along with the model parameters
                  
+                 multitask_strategy=None, 
+                 # If multiple loss functions are given, choose the strategy to balance them, can be:
+                 #   Multitask_Strategy.Uncertainty_Weighted_Loss
+                 #   Multitask_Strategy.GradNorm
+
                  scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
                  
                  *,
@@ -515,7 +693,7 @@ class train_NN_network:
         print()
 
         ########### Input checks ##########
-        self.input_check(loss_functions,scheduler,Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size, batch_by_tag)
+        self.input_check(loss_functions, scheduler, Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size, batch_by_tag, multitask_strategy)
         
         if not save_path_stem:
             caller_frame = inspect.stack()[1]
@@ -551,6 +729,8 @@ class train_NN_network:
         # 要么是weighted_multiple_loss_mode = True，并且存在self.loss_functions作为一个数组
         # 要么是weighted_multiple_loss_mode = False，并且存在self.loss_function作为单一函数
 
+        self.multitask_strategy = multitask_strategy
+
         if isinstance(loss_functions, Sequence) and len(loss_functions)==1:
             self.loss_function = loss_functions[0]
             self.weighted_multiple_loss_mode = False
@@ -560,11 +740,18 @@ class train_NN_network:
         elif isinstance(loss_functions, Sequence) and len(loss_functions)>1:
             self.weighted_multiple_loss_mode = True
             self.loss_functions = loss_functions
-            self.automatic_weighted_loss_model = Uncertainty_Weighted_Loss(len(loss_functions)).to(self.device)
-            # usually a smaller lr for the loss weights to avoid the model learns to optimize weight instead of the main model parameters
-            self.optimizer.add_param_group({'params': self.automatic_weighted_loss_model.parameters(),
-                                            "lr": optimizer.defaults['lr']*10}) 
-            print(f"Multi-task learning enabled with {len(loss_functions)} objectives (Automatic Weighted Loss).")
+            
+            if self.multitask_strategy == Multitask_Strategy.Uncertainty_Weighted_Loss:
+                self.automatic_weighted_loss_model = Uncertainty_Weighted_Loss(len(loss_functions)).to(self.device)
+                # usually a smaller lr for the loss weights to avoid the model learns to optimize weight instead of the main model parameters
+                self.optimizer.add_param_group({'params': self.automatic_weighted_loss_model.parameters(),
+                                                "lr": optimizer.defaults['lr']*10}) 
+                print(f"Multi-task learning enabled with {len(loss_functions)} objectives (Uncertainty Weighted Loss).")
+                
+            elif self.multitask_strategy == Multitask_Strategy.GradNorm:
+                print(f"Multi-task learning enabled with {len(loss_functions)} objectives (GradNorm).")
+                # GradNorm Manager initialization
+                self.automatic_weighted_loss_model = GradNorm_Manager(len(loss_functions), self.model, self.device, lr=optimizer.defaults['lr'])
 
         self.scheduler = scheduler
 
@@ -609,6 +796,10 @@ class train_NN_network:
                                                        font_size=DEFAULT_PLOT_FONT_SIZE,
                                                        x_axis_label="Epoch",
                                                        y_axis_label="Weights")
+            self.loss_raw_over_epoch_window = Plot(fig_size=DEFAULT_PLOT_SIZE,
+                                                       font_size=DEFAULT_PLOT_FONT_SIZE,
+                                                       x_axis_label="Epoch",
+                                                       y_axis_label="Raw Losses")
 
         self.evaluation_over_epoch_windows = [Plot(fig_size=DEFAULT_PLOT_SIZE,
                                                    font_size=DEFAULT_PLOT_FONT_SIZE,
@@ -625,6 +816,7 @@ class train_NN_network:
         if self.weighted_multiple_loss_mode:
             all_windows.append(self.loss_terms_over_epoch_window)
             all_windows.append(self.loss_weights_over_epoch_window)
+            all_windows.append(self.loss_raw_over_epoch_window)
         for window in all_windows:
             window.comrades = all_windows
 
@@ -724,7 +916,11 @@ class train_NN_network:
                         current_epoch_training_evaluations[i] += val
 
                 self.training_loss += batch_loss.item()
-                batch_loss.backward()
+                if self.weighted_multiple_loss_mode and self.multitask_strategy == Multitask_Strategy.GradNorm:
+                    self.automatic_weighted_loss_model.backward_and_step(batch_loss)
+                else:
+                    batch_loss.backward()
+
                 if max_gradient_norm:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_gradient_norm)
                 self.optimizer.step()
@@ -882,7 +1078,7 @@ class train_NN_network:
                 self.test_evaluations_history[i].append(val)
                 current_test_evals.append(val)
 
-            info_text = f"Epoch {str(self.epoch).rjust(len(str(self.max_epoch)))}/{self.max_epoch} | "
+            info_text = f"[按C停训] Epoch {str(self.epoch).rjust(len(str(self.max_epoch)))}/{self.max_epoch} | "
             info_text += f"Loss{smart_format_float(self.training_losses[-1], 4):>7}/{smart_format_float(test_loss, 4):<7}"
 
             for name, train_val, test_val in zip(self.non_opt_evaluation_function_names,
@@ -1005,6 +1201,23 @@ class train_NN_network:
                     active_windows.append(self.loss_weights_over_epoch_window)
                     if self.save_pngs and self.should_save_this_epoch():
                         self.loss_weights_over_epoch_window.save_png(self.save_path_stem + f"_0Weights.png", dpi=300, bbox_inches=None)
+
+                    self.loss_raw_over_epoch_window.set_figure_title(info_text)
+                    self.loss_raw_over_epoch_window.set_window_title(f"Raw Losses over Epoch @ Epoch {self.epoch}")
+                    
+                    curve_X = list(range(self.epoch))
+                    curves = []
+                    for i in range(len(self.loss_functions)):
+                        train_losses_raw = [epoch_data[i] for epoch_data in self.training_loss_terms_history]
+                        test_losses_raw = [epoch_data[i] for epoch_data in self.test_loss_terms_history]
+                        color = matplotlib_colors[i + 2]
+                        curves.append(Curve(curve_X, train_losses_raw, curve_color=color, curve_format=dashed_line, Y_label=f"Raw Loss {i+1} Train"))
+                        curves.append(Curve(curve_X, test_losses_raw, curve_color=color, curve_format=solid_line, Y_label=f"Raw Loss {i+1} Test"))
+                    
+                    self.loss_raw_over_epoch_window.Curve_objects = curves
+                    active_windows.append(self.loss_raw_over_epoch_window)
+                    if self.save_pngs and self.should_save_this_epoch():
+                        self.loss_raw_over_epoch_window.save_png(self.save_path_stem + f"_0RawLosses.png", dpi=300, bbox_inches=None)
 
                 # New Evaluation Windows
                 curve_X = list(range(self.epoch))
@@ -1139,13 +1352,19 @@ class train_NN_network:
         Xs = Xs.to(self.device)
         return self.model(Xs).squeeze(0).cpu()
 
-    def input_check(self, loss_function, scheduler, Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size,batch_by_tag):
-        
+    def input_check(self, loss_function, scheduler, Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size,batch_by_tag, multitask_strategy):
         if isinstance(loss_function, Callable):
             loss_function = [loss_function]        
         param_counts = [func_param_count(f) for f in loss_function] # 必须要么是2要么是3
         if set(param_counts).difference({2,3}):
             raise ValueError("Each loss function should take 2 or 3 parameters.")
+
+        if isinstance(loss_function, Sequence) and len(loss_function)>1:
+            if multitask_strategy is None:
+                raise ValueError("When multiple loss functions are provided, you must specify 'multitask_strategy'. "
+                                    "Options: Multitask_Strategy.Uncertainty_Weighted_Loss, Multitask_Strategy.GradNorm")
+            if multitask_strategy not in [Multitask_Strategy.Uncertainty_Weighted_Loss, Multitask_Strategy.GradNorm]:
+                raise ValueError(f"Unknown multitask strategy: {multitask_strategy}")
 
         if batch_by_tag is True and batch_size is None:
             raise ValueError("batch_by_tag is True, but batch_size is None. Please provide a batch_size.")
