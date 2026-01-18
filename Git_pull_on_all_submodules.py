@@ -13,7 +13,7 @@ from My_Lib_Stock import *
 if __name__ == '__main__':
     MAIN_FOLDER = r"E:\My_Program"
     BASE_LIB = r"E:\My_Program\Python_Lib"
-    exclude_folders = ["E:\My_Program\Gaussian_Toolkit_Backup"]
+    exclude_folders = [r"E:\My_Program\Gaussian_Toolkit_Backup"]
     project_holders = [MAIN_FOLDER,
                       os.path.join(MAIN_FOLDER,"0_Machine_Learning")]
 
