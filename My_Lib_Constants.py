@@ -10,6 +10,7 @@ N_A = 6.02214179E23
 c = 299792458
 h = 6.62606896E-34
 pi = math.pi
+charge_e = 1.60217663E-19
 
 # units
 Hartree__kcal_mol = 627.51
