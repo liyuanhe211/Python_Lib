@@ -101,10 +101,12 @@ def smart_format_float(num, precision=3, scientific_notation_limit=5):
     :param scientific_notation_limit:
 
     """
-
     if is_torch_tensor(num):
         num = num.item()
 
+    if isinstance(num,str) and is_float(num):
+        num = float(num)
+        
     if num == 0:
         return "0." + "0" * (precision - 1)
 
