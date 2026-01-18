@@ -9,6 +9,7 @@ import sys
 import pathlib
 import traceback
 
+
 Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
 sys.path.append(Python_Lib_path)
 
@@ -45,6 +46,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 from Python_Lib.My_Lib import *
 from Python_Lib.My_Lib_Plot import *
 from Python_Lib.My_Lib_Office import *
+from Python_Lib.My_Lib_System import non_block_keyboard_interrupt, disable_keyboard_interrupt, enable_keyboard_interrupt
 from Python_Lib.My_Lib_MachineLearning_Models_Public import *
 
 try:
@@ -52,13 +54,15 @@ try:
 except ImportError:
     print("Using only public models in Python_Lib.")
 
+from Python_Lib.My_Lib_MachineLearning_Loss_Functions import *
 
 # Set matplotlib backend (should be done before importing pyplot)
 matplotlib.use("QtAgg")
 
 ML_RANDOM_SEED = 20211021
 DEFAULT_INITIAL_EPOCH = 2000
-
+DEFAULT_PLOT_SIZE = (3.6, 3.2)
+DEFAULT_PLOT_FONT_SIZE = 9
 
 # Set random seed to ensure reproducibility
 def set_seed(seed=ML_RANDOM_SEED):
@@ -76,7 +80,6 @@ def set_seed(seed=ML_RANDOM_SEED):
 
 set_seed(ML_RANDOM_SEED)
 
-
 # def print_tensor(input_tensor: torch.tensor, precision=4, scientific_notation_limit=4):
 #     smart_format_float()
     # TODO
@@ -84,10 +87,20 @@ set_seed(ML_RANDOM_SEED)
 # a = torch.tensor([1.,2.,3.,4.,5.1248120985602985694])
 # print(a)
 
+def is_same_dim(a: torch.Tensor, b: torch.Tensor):
+    return a.shape == b.shape
+
+def check_same_dim(a: torch.Tensor, b: torch.Tensor):
+    if not is_same_dim(a, b):
+        raise ValueError(f"Tensor dimension mismatch: {a.shape} vs {b.shape}")
+
+# TODO
 def load_and_preprocess_data(Xs,
                              Ys,
                              test_set_ratio,
                              forward_norm_functions=[]):
+    
+    input("load_and_preprocess_data() is not finished yet.")
     assert 0 < test_set_ratio < 1
     self.Xs_train, self.Xs_test, self.Ys_train, self.Ys_test = train_test_split(Xs, Ys, test_size=test_set_ratio)
 
@@ -362,9 +375,51 @@ def to_independent_torch_tensor(x, dtype=None, device=None):
     raise TypeError(f"Unsupported type: {type(x)}")
 
 
-# DEFAULT_PLOT_SIZE = (5,4.8)
-DEFAULT_PLOT_SIZE = (4, 3.8)
-DEFAULT_PLOT_FONT_SIZE = 9
+
+class Batch_Sampler_by_Tag(torch.utils.data.Sampler):
+    '''
+    Sampler that ensures all data with the same tag are in the same batch.
+    It adds tags to a batch until the batch size exceeds the specified limit, then yields the batch.
+    '''
+    def __init__(self, tags, batch_size, shuffle):
+        self.tags = tags.detach().cpu().numpy().tolist()
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+                
+        # Convert tags from 2D tensor to list of tuples
+        # tags is (N, tag_dim), so each row is a tag descriptor
+        tags_list = [tuple(t) for t in self.tags]
+
+        # Group indices by tag
+        self.tag_to_indices = defaultdict(list)    
+        for idx, tag in enumerate(tags_list):
+            self.tag_to_indices[tag].append(idx)
+            
+        self.unique_tags = list(self.tag_to_indices.keys())
+        
+    def __iter__(self):
+        batch = []
+        tags_order = copy.copy(self.unique_tags)
+        if self.shuffle:
+            np.random.shuffle(tags_order)
+            
+        for tag in tags_order:
+            indices = self.tag_to_indices[tag]
+            batch.extend(indices)
+            
+            # Yield if batch size exceeded
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
+        
+        # Yield remaining
+        if len(batch) > 0:
+            yield batch
+
+    def __len__(self):
+        # This is an estimation because actual number of batches depends on shuffle and tag sizes
+        # But for progress bars it is usually okay
+        return (len(self.tags) + self.batch_size - 1) // self.batch_size
 
 
 # TODO: 处理输入的类型问题
@@ -372,14 +427,29 @@ class train_NN_network:
     def __init__(self,
                  model: nn.Module,
                  optimizer: torch.optim.Optimizer,
-                 loss_function,  # with [Tensor(batch_size, Y_predict_dim), Tensor(batch_size, Y_known_dim)], return a total batch loss
-                 scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+                 loss_functions: Union[Callable, List[Callable]],
+                 # 如果只声明一个 loss_function：
+                 #    loss_function should take 2 or 3 parameters, with (Ys_pred, Ys_known, [Tags])
+                 #    Dimentions (batch_size, len(Ys), _), (batch_size, len(Ys), _), (batch_size, len(Ys), _)
+                 #    3 parameters should be requested if the Tags and batch_by_tag is selected
+                 # 如果声明多个 loss_function 作为一个 list of callable 传入
+                 #    the requrement for each loss_function is same as above
+                 #    Then Automatic Weighted Loss will be applied to balance the multiple objectives
+                 #    With the additional parameter eta[i] added for each loss function and are optimized along with the model parameters
+                 
+                 scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
+                 
+                 *,
+                 Xs_train: torch.Tensor,  # should be normalized
+                 Ys_train: torch.Tensor,  # should be normalized
+                 Xs_test: torch.Tensor,  # should be normalized
+                 Ys_test: torch.Tensor,  # should be normalized
+                 Tags_train: Optional[torch.Tensor] = None,  # (Num_Entries, N_Tags) Optional tags for each training data, in case it in needed for grouping dependent loss function
+                 Tags_test: Optional[torch.Tensor] = None,   # (Num_Entries, N_Tags) Optional tags for each training data
 
-                 Xs_train: Optional[torch.Tensor] = None,  # should be normalized
-                 Ys_train: Optional[torch.Tensor] = None,  # should be normalized
-                 Xs_test: Optional[torch.Tensor] = None,  # should be normalized
-                 Ys_test: Optional[torch.Tensor] = None,  # should be normalized
                  batch_size=None,  # None for Everything as one batch
+                 batch_by_tag = False,  # If True, each batch contains data with the same tag. Only works when Tags_train/test is given.
+                 shuffle = True,
 
                  ########## Optimization helpers ##########
                  device=None,
@@ -388,6 +458,8 @@ class train_NN_network:
                  ########## Stop conditions ##########
                  initial_max_epoch=None,
                  ask_after_max_epoch=True,
+                 automatic_extension=True,
+                 loss_weight_convergence_threshold=1e-3, # 在使用多个loss function需要weighting的情况下，loss weight必须在最后10%的epoch里的变化程度小于这个比例才叫收敛
                  early_stopping_strategy=None,
                  # Can choose from: do not stop, or stop when testing data hasen't dropped for n cycles, then load the lowest one
 
@@ -404,19 +476,27 @@ class train_NN_network:
                  print_by_geo_sequence=1.005,
                  plot_every_n_epoch=200,
                  plot_by_geo_sequence=1.005,
+
                  plot_current_linear_fit=True,
                  plot_loss_over_epoch=True,
                  function_for_numerical_evaluation=None,
                  # a callable to convert Ys output to a list of scalar, so that it can be plotted against the given output in a linear way
+
                  plot_cases=None,  # ((X1,Y1_known),(X2,Y2_known)...) # TODO: or just (X,Y)
+                 plot_cases_tags=None,  # Optional tags for each plot case, for evaluating the loss for the test function
                  plot_cases_names=None,
                  function_for_plot_test_cases=None,
                  # a callable to convert one X and one Y to two list of scalars, so that it can be plotted against the predicted value
+                 
                  callback_function=None,
                  non_opt_evaluation_functions=None,
                  non_opt_evaluation_function_names=None
                  ):
+        """
+        Docstring for __init__
+        """
 
+        ########## GPU/CPU selection ##########
         print()
         if device is not None:
             print("Using device:", device)
@@ -425,14 +505,18 @@ class train_NN_network:
             self.device = torch.device("cpu")
             if torch.cuda.is_available():
                 # Get the number of GPUs available
-                # TODO: for multiple GPUs
                 num_gpus = torch.cuda.device_count()
+                if num_gpus > 1:
+                    input(f"Multiple GPUs ({num_gpus}) detected. The library did not account for this situation.")
                 print(f"Using GPU {0}: {torch.cuda.get_device_name(0)}")
                 self.device = torch.device('cuda:0')
             else:
                 print("No GPUs available.")
         print()
 
+        ########### Input checks ##########
+        self.input_check(loss_functions,scheduler,Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size, batch_by_tag)
+        
         if not save_path_stem:
             caller_frame = inspect.stack()[1]
             caller_full_path = os.path.abspath(caller_frame.filename)
@@ -443,14 +527,16 @@ class train_NN_network:
             save_path_stem = os.path.join(save_folder, "Save")
         else:
             save_folder = os.path.dirname(save_path_stem)
+        
+        save_path_stem = get_unused_filename(save_path_stem)
 
         if save_script:
             # Save the caller script in the checkpoint folder
             caller_frame = inspect.stack()[1]
             caller_full_path = os.path.abspath(caller_frame.filename)
+            dst_script_path = os.path.join(save_folder, filename_name(caller_full_path))
+            os.makedirs(dst_script_path, exist_ok=True)
             try:
-                dst_script_path = os.path.join(save_folder, filename_name(caller_full_path))
-                os.makedirs(dst_script_path)
                 shutil.copy2(caller_full_path, dst_script_path)
                 print(f"Original script {caller_full_path} backed up to {dst_script_path}")
             except Exception as e:
@@ -460,8 +546,28 @@ class train_NN_network:
 
         self.model = model.to(self.device)
         self.optimizer = optimizer
-        self.loss_function = loss_function
+
+        ######### Loss function(s) ##########
+        # 要么是weighted_multiple_loss_mode = True，并且存在self.loss_functions作为一个数组
+        # 要么是weighted_multiple_loss_mode = False，并且存在self.loss_function作为单一函数
+
+        if isinstance(loss_functions, Sequence) and len(loss_functions)==1:
+            self.loss_function = loss_functions[0]
+            self.weighted_multiple_loss_mode = False
+        elif isinstance(loss_functions, Callable):
+            self.weighted_multiple_loss_mode = False
+            self.loss_function = loss_functions
+        elif isinstance(loss_functions, Sequence) and len(loss_functions)>1:
+            self.weighted_multiple_loss_mode = True
+            self.loss_functions = loss_functions
+            self.automatic_weighted_loss_model = Uncertainty_Weighted_Loss(len(loss_functions)).to(self.device)
+            # usually a smaller lr for the loss weights to avoid the model learns to optimize weight instead of the main model parameters
+            self.optimizer.add_param_group({'params': self.automatic_weighted_loss_model.parameters(),
+                                            "lr": optimizer.defaults['lr']*10}) 
+            print(f"Multi-task learning enabled with {len(loss_functions)} objectives (Automatic Weighted Loss).")
+
         self.scheduler = scheduler
+
         self.save_path_stem = save_path_stem
         self.save_pngs = save_pngs
         self.save_every_n_epoch = save_every_n_epoch
@@ -474,6 +580,8 @@ class train_NN_network:
         self.plot_loss_over_epoch = plot_loss_over_epoch
         self.function_for_numerical_evaluation = function_for_numerical_evaluation
         self.plot_cases = plot_cases or []
+        if plot_cases_tags is None:
+            self.plot_cases_tags = torch.empty((len(self.plot_cases), 0), dtype=torch.long)
         self.plot_cases_names = plot_cases_names or []
         self.function_for_plot_one_test = function_for_plot_test_cases
         self.callback_function = callback_function
@@ -492,6 +600,16 @@ class train_NN_network:
                                            x_axis_label="Epoch",
                                            y_axis_label="Loss")
 
+        if self.weighted_multiple_loss_mode:
+            self.loss_terms_over_epoch_window = Plot(fig_size=DEFAULT_PLOT_SIZE,
+                                                     font_size=DEFAULT_PLOT_FONT_SIZE,
+                                                     x_axis_label="Epoch",
+                                                     y_axis_label="Loss Terms")
+            self.loss_weights_over_epoch_window = Plot(fig_size=DEFAULT_PLOT_SIZE,
+                                                       font_size=DEFAULT_PLOT_FONT_SIZE,
+                                                       x_axis_label="Epoch",
+                                                       y_axis_label="Weights")
+
         self.evaluation_over_epoch_windows = [Plot(fig_size=DEFAULT_PLOT_SIZE,
                                                    font_size=DEFAULT_PLOT_FONT_SIZE,
                                                    x_axis_label="Epoch",
@@ -504,52 +622,103 @@ class train_NN_network:
                                         y_axis_label="Output") for _ in range(len(self.plot_cases))]
 
         all_windows = [self.linear_fit_window, self.loss_over_epoch_window] + self.plot_cases_windows + self.evaluation_over_epoch_windows
+        if self.weighted_multiple_loss_mode:
+            all_windows.append(self.loss_terms_over_epoch_window)
+            all_windows.append(self.loss_weights_over_epoch_window)
         for window in all_windows:
             window.comrades = all_windows
 
+        if Tags_train is None and Tags_test is None:
+            Tags_train = torch.empty((len(Xs_train), 0), dtype=torch.long)
+            Tags_test = torch.empty((len(Xs_test), 0), dtype=torch.long)
+
         self.Xs_train, self.Xs_test, self.Ys_train, self.Ys_test = Xs_train, Xs_test, Ys_train, Ys_test
+        self.Tags_train:torch.Tensor = Tags_train
+        self.Tags_test:torch.Tensor = Tags_test
+        self.batch_by_tag = batch_by_tag
+        self.shuffle = shuffle
 
         self.Xs_train = self.Xs_train.to(self.device)
         self.Ys_train = self.Ys_train.to(self.device)
         self.Xs_test = self.Xs_test.to(self.device)
-        self.Ys_test: torch.Tensor = self.Ys_test.to(self.device)
+        self.Ys_test = self.Ys_test.to(self.device)
 
         if batch_size:
-            dataset_object = TensorDataset(self.Xs_train, self.Ys_train)
-            batched_X_train_Y_train = DataLoader(dataset_object, batch_size=batch_size, shuffle=True)
+            dataset_object = TensorDataset(self.Xs_train, self.Ys_train, self.Tags_train)
+            if self.batch_by_tag:
+                sampler = Batch_Sampler_by_Tag(self.Tags_train, batch_size=batch_size, shuffle=self.shuffle)
+                batched_X_train_Y_train = DataLoader(dataset_object, batch_sampler=sampler)
+            else:
+                batched_X_train_Y_train = DataLoader(dataset_object, batch_size=batch_size, shuffle=self.shuffle)
         else:
-            batched_X_train_Y_train = [[self.Xs_train, self.Ys_train]]
+            batched_X_train_Y_train = [[self.Xs_train, self.Ys_train, self.Tags_train]]
+
 
         self.epoch = 1
         if initial_max_epoch is None:
             initial_max_epoch = DEFAULT_INITIAL_EPOCH
         self.max_epoch = initial_max_epoch
 
+        self.automatic_extension = automatic_extension
+        self.ask_after_max_epoch=ask_after_max_epoch
+        self.loss_weight_convergence_threshold=loss_weight_convergence_threshold
+
         self.training_losses = []
         self.test_losses = []
+        if self.weighted_multiple_loss_mode:
+            self.training_loss_terms_history = [] 
+            self.test_loss_terms_history = []
+            self.training_weights_history = []
+            self.test_weights_history = []
         self.training_evaluations_history = [[] for _ in range(len(self.non_opt_evaluation_functions))]
         self.test_evaluations_history = [[] for _ in range(len(self.non_opt_evaluation_functions))]
+        self.optimization_quality_history = []  # List of (epoch, is_good) tuples
         self.last_save_epoch = 0
         self.last_print_epoch = 0
         self.last_plot_epoch = 0
+        self.user_interrupted = False  # Flag for manual interruption by pressing 'C'
 
         self.training_start_time = time.time()
         while self.epoch <= self.max_epoch:
+            ############ Check for user interruption ############
+            if non_block_keyboard_interrupt():
+                print("\n[User requested interruption by pressing 'C'. Will stop after this epoch...]")
+                self.user_interrupted = True
+            
             ############ Training loop ############
             self.training_loss = 0.
             current_epoch_training_evaluations = [0.0] * len(self.non_opt_evaluation_functions)
-            for X_train_batch, Y_train_batch in batched_X_train_Y_train:
+            if self.weighted_multiple_loss_mode:
+                current_epoch_loss_terms = [0.0] * len(self.loss_functions)
+                current_epoch_weights = [0.0] * len(self.loss_functions)
+
+            for batch_data in batched_X_train_Y_train:
+                # Depending on how DataLoader unpacked it, it might be a list of tensors
+                X_train_batch, Y_train_batch, Tags_train_batch = batch_data
                 X_train_batch = X_train_batch.to(self.device)
                 Y_train_batch = Y_train_batch.to(self.device)
+                Tags_train_batch = Tags_train_batch.to(self.device)
 
                 self.optimizer.zero_grad()
                 Y_predict_train_batch = self.model(X_train_batch)
-                batch_loss = self.loss_function(Y_predict_train_batch, Y_train_batch)
+                
+                batch_loss = self.evaluate_loss(Y_predict_train_batch, Y_train_batch, Tags_train_batch)
+
+                if self.weighted_multiple_loss_mode:
+                    for i, val in enumerate(self.automatic_weighted_loss_model.loss_terms):
+                        current_epoch_loss_terms[i] += val
+                    for i, val in enumerate(self.automatic_weighted_loss_model.weights):
+                        current_epoch_weights[i] += val
 
                 # Evaluation
                 with torch.no_grad():
                     for i, func in enumerate(self.non_opt_evaluation_functions):
-                        val = func(Y_predict_train_batch, Y_train_batch)
+                        if func_param_count(func) == 3:
+                            val = func(Y_predict_train_batch, Y_train_batch, Tags_train_batch)
+                        elif func_param_count(func) == 2:
+                            val = func(Y_predict_train_batch, Y_train_batch)
+                        else:
+                            raise ValueError(f"Evaluation function {i} has invalid number of parameters.")
                         if isinstance(val, torch.Tensor):
                             val = val.item()
                         current_epoch_training_evaluations[i] += val
@@ -559,10 +728,19 @@ class train_NN_network:
                 if max_gradient_norm:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_gradient_norm)
                 self.optimizer.step()
-            self.training_loss /= len(batched_X_train_Y_train)
+            
+            num_batches = len(batched_X_train_Y_train)
+
+            self.training_loss /= num_batches
             for i in range(len(current_epoch_training_evaluations)):
                 current_epoch_training_evaluations[i] /= len(batched_X_train_Y_train)
                 self.training_evaluations_history[i].append(current_epoch_training_evaluations[i])
+
+            if self.weighted_multiple_loss_mode:
+                current_epoch_loss_terms = [x / num_batches for x in current_epoch_loss_terms]
+                current_epoch_weights = [x / num_batches for x in current_epoch_weights]
+                self.training_loss_terms_history.append(current_epoch_loss_terms)
+                self.training_weights_history.append(current_epoch_weights)
 
             if self.scheduler is not None:
                 self.scheduler.step()
@@ -572,31 +750,133 @@ class train_NN_network:
             self.evaluate()
 
             ############ Termination control ############
-            if self.epoch == self.max_epoch and ask_after_max_epoch:
-                while True:
-                    response = input(f'Max epoch {self.max_epoch} reached. To end the optimization, input "END"; otherwise input a new max_epoch number: ')
-                    if response == "END" or (is_int(response) and int(response) > self.max_epoch):
-                        break
-                if response == "END":
+            # Adjust max_epoch if still dropping; 如果只训练5个epoch，肯定是在做某种测试，不再extend
+            if self.epoch == self.max_epoch:
+                extended = self.optimization_extention_control()
+                if not extended:
                     break
-                else:
-                    self.max_epoch = int(response)
+
             self.epoch += 1
 
             if self.callback_function is not None:
                 self.callback_function(self)
 
+            ############ Check for user interruption ############
+            if self.user_interrupted:
+                print(f"Training interrupted by user at epoch {self.epoch}.")
+                break
+
+    def is_good_optimization_epochs(self, check_epoch):
+        """
+        Check if optimization is good at a specific epoch.
+        """
+        if check_epoch > len(self.test_losses) or check_epoch < 1:
+            raise ValueError("check_epoch out of range in is_good_optimization_epochs().")
+            
+        # 1. If current loss is the lowest in history up to that point
+        if self.test_losses[check_epoch - 1] <= min(self.test_losses[:check_epoch]):
+            return True
+
+        # 2. Check if loss is still dropping using trimmed mean comparison
+        for ratio in [0.05, 0.1, 0.2]:
+            window_size = math.ceil(check_epoch * ratio)
+            group1 = self.test_losses[check_epoch - window_size:check_epoch]
+            group2 = self.test_losses[check_epoch - 2 * window_size:check_epoch - window_size]
+            if trimmed_mean(group1) < trimmed_mean(group2):
+                return True
+                
+        return False
+    
+    def optimization_extention_control(self):
+        """
+        Control the extension of max_epoch based on the test loss trend.
+        :return: True to continue, False to stop
+        """
+        time_check = time.time()
+        if self.automatic_extension and self.epoch > 5:
+            # Calculate all checkpoints with 5% geometric progression
+            # 例如，self.optimization_quality_history 可能是
+            # 
+            # 1209, False  |  1270, False  |  1334, True  |  1401, True  |  1472, False  |  1546, False  
+            # 1624, True  |  1706, True  |  1792, True  |  1882, True  |  1977, True  |  2076, True  |  
+            # 2180, True  |  2289, True  |  2404, True  |  2525, True  |  2652, False  |  2785, False  |  
+            # 2925, False  |  3072, False  |  3226, False  |  3388, False
+            # 
+            # 那么寻找最后一个连续是True的最大可能的阶段，此处是1547~2651，共1105个epoch
+            # 那么新的max_epoch就是2651 + 3*1105 = 5966
+
+            if not self.optimization_quality_history:
+                check_epoch = 5
+            else:
+                last_check_epoch = self.optimization_quality_history[-1][0]
+                check_epoch = math.ceil(last_check_epoch * 1.05)
+            while check_epoch <= self.epoch:
+                # Only calculate if not already in history
+                is_good = self.is_good_optimization_epochs(check_epoch)
+                self.optimization_quality_history.append((check_epoch, is_good))
+                check_epoch = math.ceil(check_epoch * 1.05)
+
+            # Find last True and start of its continuous block
+            last_True_region_start = 0
+            last_True_region_end = self.max_epoch
+
+            if True in [x[1] for x in self.optimization_quality_history]:
+                optimization_history = [(0, False)] + self.optimization_quality_history + [(self.epoch+1, False)]
+
+                for i in range(1,len(optimization_history)-1):
+                    before = optimization_history[i-1]
+                    current = optimization_history[i]
+                    after = optimization_history[i+1]
+
+                    if before[1]==False and current[1]==True:
+                        last_True_region_start = before[0]+1
+                    if current[1]==True and after[1]==False:
+                        last_True_region_end = after[0]-1
+                
+                new_max_epoch = last_True_region_end + 3 * (last_True_region_end - last_True_region_start + 1)
+                if new_max_epoch > self.max_epoch:
+                    print("Good optimization trend detection list:")
+                    print(optimization_history)
+                    print(f"Extension to {new_max_epoch} based on optimization quality history (3x length of last good area).")
+                    self.max_epoch = new_max_epoch
+                    print("Time taken for optimization extension control:", time.time() - time_check)
+                    return True
+
+        if self.ask_after_max_epoch:
+            disable_keyboard_interrupt()  # Disable keyboard interrupt before input()
+            while True:
+                response = input(f'Max epoch {self.max_epoch} reached. To end the optimization, input "END"; otherwise input a new max_epoch number: ')
+                if response == "END" or (is_int(response) and int(response) > self.max_epoch):
+                    break
+            enable_keyboard_interrupt()  # Re-enable keyboard interrupt after input()
+            if response == "END":
+                return False
+            else:
+                self.max_epoch = int(response)
+                return True
+
     def evaluate(self):
         self.model.eval()
         with torch.no_grad():
             Ys_predict_test: torch.Tensor = self.model(self.Xs_test)
-            test_loss = self.loss_function(Ys_predict_test, self.Ys_test).item()
+
+            test_loss = self.evaluate_loss(Ys_predict_test, self.Ys_test, self.Tags_test)
             self.test_losses.append(test_loss)
+
+            if self.weighted_multiple_loss_mode:
+                self.test_loss_terms_history.append(self.automatic_weighted_loss_model.loss_terms)
+                self.test_weights_history.append(self.automatic_weighted_loss_model.weights)
 
             # Evaluation
             current_test_evals = []
             for i, func in enumerate(self.non_opt_evaluation_functions):
-                val = func(Ys_predict_test, self.Ys_test)
+                if len(inspect.signature(func).parameters) == 2:
+                    val = func(Ys_predict_test, self.Ys_test)
+                elif len(inspect.signature(func).parameters) == 3:
+                    val = func(Ys_predict_test, self.Ys_test, self.Tags_test)
+                else:
+                    raise ValueError(f"Evaluation function {i} has invalid number of parameters.")    
+
                 if isinstance(val, torch.Tensor):
                     val = val.item()
                 self.test_evaluations_history[i].append(val)
@@ -610,6 +890,22 @@ class train_NN_network:
                                                  current_test_evals):
                 info_text += f"| {name} {smart_format_float(train_val, 4):>7}/{smart_format_float(test_val, 4):<7}"
 
+            if self.weighted_multiple_loss_mode:
+                for i in range(len(self.loss_functions)):
+                    train_term = self.training_loss_terms_history[-1][i]
+                    test_term = self.test_loss_terms_history[-1][i]
+                    train_weight = self.training_weights_history[-1][i]
+                    test_weight = self.test_weights_history[-1][i]
+                    
+                    info_text += f"| T{i+1} {smart_format_float(train_term, 4)}/{smart_format_float(test_term, 4)}"
+                    info_text += f" W{i+1} {smart_format_float(train_weight, 4)}/{smart_format_float(test_weight, 4)}"
+
+            if len(info_text) > 60:
+                indices = [i for i, c in enumerate(info_text) if c == '|']
+                if indices:
+                    split_idx = min(indices, key=lambda x: abs(x - len(info_text)//2))
+                    info_text = info_text[:split_idx] + "\n    " + info_text[split_idx+1:].lstrip()
+
             filename_text = f"{self.epoch:0>5.0f}_{smart_format_float(self.training_losses[-1], 4)}_{smart_format_float(test_loss, 4)}"
 
             ############ Printing ############
@@ -620,7 +916,7 @@ class train_NN_network:
                 print_training_speed = (time.time() - self.training_start_time) / self.epoch * print_training_speed_epochs
                 print_training_speed = f"{print_time_difference(print_training_speed, width=0)}/{print_training_speed_epochs} Epoch{'s' if print_training_speed_epochs > 1 else ''}"
 
-                print(f"{info_text} | Time: {print_elapsed_time} | {print_training_speed}")
+                print(f'{info_text} | Time: {print_elapsed_time} | {print_training_speed}')
 
             ############ Plotting ############
             active_windows: List[Plot] = []
@@ -674,6 +970,42 @@ class train_NN_network:
                         self.loss_over_epoch_window.save_png(self.save_path_stem + f"_0Losses.png", dpi=300, bbox_inches=None)
                     active_windows.append(self.loss_over_epoch_window)
 
+                if self.weighted_multiple_loss_mode:
+                    self.loss_terms_over_epoch_window.set_figure_title(info_text)
+                    self.loss_terms_over_epoch_window.set_window_title(f"Loss Terms over Epoch @ Epoch {self.epoch}")
+                    
+                    curve_X = list(range(self.epoch))
+                    curves = []
+                    for i in range(len(self.loss_functions)):
+                        train_losses_weighted = [epoch_data[i]*weight[i] for epoch_data,weight in zip(self.training_loss_terms_history,self.training_weights_history)]
+                        test_losses_weighted = [epoch_data[i]*weight[i] for epoch_data,weight in zip(self.test_loss_terms_history,self.test_weights_history)]
+                        color = matplotlib_colors[i + 2]
+                        curves.append(Curve(curve_X, train_losses_weighted, curve_color=color, curve_format=dashed_line, Y_label=f"Weighted Loss {i+1} Train"))
+                        curves.append(Curve(curve_X, test_losses_weighted, curve_color=color, curve_format=solid_line, Y_label=f"Weighted Loss {i+1} Test"))
+                    
+                    self.loss_terms_over_epoch_window.Curve_objects = curves
+                    active_windows.append(self.loss_terms_over_epoch_window)
+                    if self.save_pngs and self.should_save_this_epoch():
+                        self.loss_terms_over_epoch_window.save_png(self.save_path_stem + f"_0LossTerms.png", dpi=300, bbox_inches=None)
+
+                    self.loss_weights_over_epoch_window.set_figure_title(info_text)
+                    self.loss_weights_over_epoch_window.set_window_title(f"Weights over Epoch @ Epoch {self.epoch}")
+                    
+                    curve_X = list(range(self.epoch))
+                    curves = []
+                    for i in range(len(self.loss_functions)):
+                        train_losses_weighted = [epoch_data[i] for epoch_data in self.training_weights_history]
+                        test_losses_weighted = [epoch_data[i] for epoch_data in self.test_weights_history]
+                        color = matplotlib_colors[i + 2]
+                        curves.append(Curve(curve_X, train_losses_weighted, curve_color=color, curve_format="--", Y_label=f"Weight {i+1}"))
+                        # curves.append(Curve(curve_X, test_y, curve_color=color, curve_format="-", Y_label=f"Weight {i+1} Test"))
+                    
+                    self.loss_weights_over_epoch_window.Curve_objects = curves
+                    self.loss_weights_over_epoch_window.y_lim = (0, None)
+                    active_windows.append(self.loss_weights_over_epoch_window)
+                    if self.save_pngs and self.should_save_this_epoch():
+                        self.loss_weights_over_epoch_window.save_png(self.save_path_stem + f"_0Weights.png", dpi=300, bbox_inches=None)
+
                 # New Evaluation Windows
                 curve_X = list(range(self.epoch))
                 for i, window in enumerate(self.evaluation_over_epoch_windows):
@@ -688,7 +1020,7 @@ class train_NN_network:
                     active_windows.append(window)
 
                 if self.plot_cases:
-                    for window_count, (case_data, case_window) in enumerate(zip(self.plot_cases, self.plot_cases_windows)):
+                    for window_count, (case_data, case_window, case_tag) in enumerate(zip(self.plot_cases, self.plot_cases_windows, self.plot_cases_tags)):
                         case_window.set_window_title(f"Example Curve {window_count + 1} @ Epoch {self.epoch}")
 
                         input_, output_known = case_data
@@ -712,8 +1044,9 @@ class train_NN_network:
                             [Curve(curve_X, curve_Y_known, curve_color=blue_color, Y_label="known curve"),
                              Curve(curve_X, curve_Y_predicted, curve_color=red_color, Y_label="predicted curve"), ]
                         active_windows.append(case_window)
+                    
+                        example_loss = self.evaluate_loss(output_predicted.unsqueeze(0), output_known.unsqueeze(0), case_tag.unsqueeze(0)).item()
 
-                        example_loss = self.loss_function(output_predicted.unsqueeze(0), output_known.unsqueeze(0)).item()
                         case_window.set_figure_title(
                             info_text + f" | {self.plot_cases_names[window_count]} Case {window_count + 1} | Loss {smart_format_float(example_loss, 4)}")
                         if self.save_pngs and self.should_save_this_epoch():
@@ -734,6 +1067,27 @@ class train_NN_network:
         self.model.train()
 
         return test_loss
+
+    def evaluate_loss(self,Ys_pred, Ys_known, Tags=None):
+        assert Ys_pred.shape == Ys_known.shape, "Ys_pred and Ys_known must have the same shape."
+        if self.weighted_multiple_loss_mode:
+            losses = []
+            for func in self.loss_functions:
+                if func_param_count(func)==3:
+                    losses.append(func(Ys_pred, Ys_known, Tags))
+                elif func_param_count(func)==2:
+                    losses.append(func(Ys_pred, Ys_known))
+                else:
+                    raise ValueError("Each loss function should take 2 or 3 parameters.")
+                
+            loss = self.automatic_weighted_loss_model(*losses)
+        else:
+            if func_param_count(self.loss_function)==3:
+                loss = self.loss_function(Ys_pred, Ys_known, Tags)
+            else:
+                loss = self.loss_function(Ys_pred, Ys_known)
+
+        return loss
 
     def should_save_this_epoch(self):
         if self.epoch == self.max_epoch:
@@ -784,3 +1138,52 @@ class train_NN_network:
         Xs = Xs.detach().clone()
         Xs = Xs.to(self.device)
         return self.model(Xs).squeeze(0).cpu()
+
+    def input_check(self, loss_function, scheduler, Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size,batch_by_tag):
+        
+        if isinstance(loss_function, Callable):
+            loss_function = [loss_function]        
+        param_counts = [func_param_count(f) for f in loss_function] # 必须要么是2要么是3
+        if set(param_counts).difference({2,3}):
+            raise ValueError("Each loss function should take 2 or 3 parameters.")
+
+        if batch_by_tag is True and batch_size is None:
+            raise ValueError("batch_by_tag is True, but batch_size is None. Please provide a batch_size.")
+
+        # 检查 Xs 和 Ys 都是 2D tensor
+        if not Xs_train.dim()==Xs_test.dim()==Ys_train.dim()==Ys_test.dim()==2:
+            raise ValueError("Xs and Ys must be 2D tensors. i.e. it should be like [[feature1, feature2, ...], [...], ...]. " \
+            "If there is only one feature, it should be like [[feature1], [feature1], ...], instead of [feature1, feature1, ...].")
+        
+        # 检查 Xs 的行数和 Ys 的行数相等
+        if not (len(Xs_train)==len(Ys_train) and len(Xs_test)==len(Ys_test)):
+            raise ValueError("The number of samples in Xs and Ys must be equal.")   
+        
+        # 检查 Xs_train 和 Xs_test 的列数相等
+        if not Xs_train.size(1)==Xs_test.size(1):
+            raise ValueError("Xs_train and Xs_test must have the same number of columns.")
+        
+        # 检查 Ys_train 和 Ys_test 的列数相等
+        if not Ys_train.size(1)==Ys_test.size(1):
+            raise ValueError("Ys_train and Ys_test must have the same number of columns.")
+
+        # 尚未确认 Ys 有多维特征输出的情况工作是正常的
+        if Ys_train.size(1)>1:
+            input("Warning: ys_pred has more than one feature dimension. This feature is not verified. Continue?")
+
+        # 如果Tags_train和Tags_test不是None，检查它们的长度和Xs, Ys的长度相等
+        if Tags_train is not None and Tags_test is not None:
+            if not len(Tags_train)==len(Xs_train) or not len(Tags_test)==len(Xs_test):
+                raise ValueError("The number of samples in Tags and Xs/Ys must be equal.")
+            if not Tags_train.dim()==Tags_test.dim()==2:
+                raise ValueError("Tags_train and Tags_test must be 2D tensors.")
+            if Tags_train.size(1) != Tags_test.size(1):
+                raise ValueError("Tags_train and Tags_test must have the same number of columns.")
+            
+        elif Tags_train is None and Tags_test is None:
+            if batch_by_tag:
+                raise ValueError("batch_by_tag is True, but both Tags_train and Tags_test are None.")
+
+        # Tags_train, Tags_test 要么都是None, 要么都不是None
+        else:
+            raise ValueError("Tags_train and Tags_test must both be None or both be provided.")
