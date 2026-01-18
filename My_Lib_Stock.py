@@ -29,6 +29,28 @@ sys.path.append(Python_Lib_path)
 from My_Lib_Constants import *
 from My_Lib_File import *
 
+def is_torch_tensor(obj) -> bool:
+    """
+    Check if the object is a PyTorch Tensor without importing torch.
+
+    Args:
+        obj: The object to check.
+    """
+    type_ret = f'{getattr(type(obj), "__module__", "")}.{getattr(type(obj), "__qualname__", "")}'
+    return type_ret == 'torch.Tensor'
+    
+
+def func_param_count(func: Callable) -> int:
+    """
+    Get the number of parameters of a function
+
+    Args:
+        func (Callable): The function to inspect.
+
+    Returns:
+        int: The number of parameters the function accepts.
+    """
+    return len(inspect.signature(func).parameters)
 
 def smart_format_float(num, precision=3, scientific_notation_limit=5):
     """
@@ -79,6 +101,10 @@ def smart_format_float(num, precision=3, scientific_notation_limit=5):
     :param scientific_notation_limit:
 
     """
+
+    if is_torch_tensor(num):
+        num = num.item()
+
     if num == 0:
         return "0." + "0" * (precision - 1)
 
