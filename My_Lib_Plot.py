@@ -686,13 +686,22 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.move_window()
 
     def move_window(self):
-        screen_geometry = Global_QApplication.get_app().primaryScreen().availableGeometry()
+        app = Global_QApplication.get_app()
+        screens = app.screens()
+        if len(screens) > 1:
+            target_screen = screens[-1]
+        else:
+            target_screen = app.primaryScreen()
+
+        screen_geometry = target_screen.availableGeometry()
         screen_width = screen_geometry.width()
         screen_height = screen_geometry.height()
+        screen_x = screen_geometry.x()
+        screen_y = screen_geometry.y()
 
         # Calculate top-left point if centered
-        x_centered = (screen_width - self.width()) // 2
-        y_centered = (screen_height - self.height()) // 2
+        x_centered = screen_x + (screen_width - self.width()) // 2
+        y_centered = screen_y + (screen_height - self.height()) // 2
 
         new_x_position = x_centered + self.shift_window[0] * (self.width() + 3)
         new_y_position = y_centered + self.shift_window[1] * (self.height() + 30)
@@ -944,45 +953,65 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         update_UI()
 
     def save_csv(self, output_filename):
-        try:
-            csv_folder = os.path.join(filename_parent(output_filename), "Numeric_Plot_Data")
-            os.makedirs(csv_folder, exist_ok=True)
-            csv_path = os.path.join(csv_folder, filename_stem(output_filename) + ".csv")
+        """
+        Legacy for save_plot_history
+        """
+        self.save_plot_history(output_filename)
+        
+    def save_plot_history(self, output_filename):
+        plot_history_folder = os.path.join(filename_parent(output_filename), "Plot_History")
+        os.makedirs(plot_history_folder, exist_ok=True)
+        csv_path = os.path.join(plot_history_folder, filename_stem(output_filename) + ".csv")
+        csv_path = get_unused_filename(csv_path)
 
-            data_columns = []
-            headers = []
-            max_len = 0
+        data_columns = []
+        headers = []
+        max_len = 0
 
-            for i, curve in enumerate(self.Curve_objects):
-                # Use original data
-                xs = list(curve.Xs)
-                ys = list(curve.Ys)
+        for i, curve in enumerate(self.Curve_objects):
+            # Use original data
+            xs = list(curve.Xs)
+            ys = list(curve.Ys)
 
-                max_len = max(len(xs), max_len)
+            max_len = max(len(xs), max_len)
 
-                data_columns.append(xs)
-                data_columns.append(ys)
+            data_columns.append(xs)
+            data_columns.append(ys)
 
-                # Try to get a label
-                label = curve.Y_label if curve.Y_label else f"Curve_{i + 1}"
-                headers.append(f"{label}_X")
-                headers.append(f"{label}_Y")
+            # Try to get a label
+            label = curve.Y_label if curve.Y_label else f"Curve_{i + 1}"
+            headers.append(f"{label}_X")
+            headers.append(f"{label}_Y")
 
-            with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
 
-                for i in range(max_len):
-                    row = []
-                    for col in data_columns:
-                        if i < len(col):
-                            row.append(col[i])
-                        else:
-                            row.append("")
-                    writer.writerow(row)
+            for i in range(max_len):
+                row = []
+                for col in data_columns:
+                    if i < len(col):
+                        row.append(col[i])
+                    else:
+                        row.append("")
+                writer.writerow(row)
 
-        except Exception as e:
-            print(f"Error saving numeric data: {e}")
+        # Log title and filename if title exists
+        if hasattr(self, 'current_title') and self.current_title:
+            filename = os.path.basename(output_filename)
+            
+            if not hasattr(self, 'log_filenames'):
+                self.log_filenames = {}
+            
+            if plot_history_folder not in self.log_filenames:
+                base_log = os.path.join(plot_history_folder, f"0_Plot_Infos_{filename}.txt")
+                self.log_filenames[plot_history_folder] = get_unused_filename(base_log)
+            
+            log_file = self.log_filenames[plot_history_folder]
+
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"{filename}\tPlot Title\t{self.current_title}\n")
+
 
     def save_png(self, output_filename, dpi=None, bbox_inches="tight"):
         """
@@ -997,26 +1026,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         dpi = dpi or self.save_img_dpi
         self._fig.savefig(output_filename, dpi=dpi, bbox_inches=bbox_inches)
 
-        self.save_csv(output_filename)
+        self.save_plot_history(output_filename)
 
-        if hasattr(self, 'current_title') and self.current_title:
-            try:
-                folder = os.path.dirname(output_filename)
-                filename = os.path.basename(output_filename)
-                
-                if not hasattr(self, 'log_filenames'):
-                    self.log_filenames = {}
-                
-                if folder not in self.log_filenames:
-                    base_log = os.path.join(folder, "0_Plot_Infos.txt")
-                    self.log_filenames[folder] = get_unused_filename(base_log)
-                
-                log_file = self.log_filenames[folder]
-
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"{self.current_title}\t{filename}\n")
-            except Exception as e:
-                print(f"Error logging PNG title: {e}")
 
     def save_svg(self, output_filename):
         """
@@ -1026,7 +1037,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         :param output_filename: The path to save the SVG file.
         """
         self._fig.savefig(output_filename, bbox_inches="tight")
-        self.save_csv(output_filename)
+        self.save_plot_history(output_filename)
 
 
 def integrate_discrete_points(x_values, y_values, start_range, end_range):
