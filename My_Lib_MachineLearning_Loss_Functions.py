@@ -220,6 +220,15 @@ class Uncertainty_Weighted_Loss(nn.Module):
                              print(f"  Task {i}: Loss={val:.4g} -> Auto-set eta={self.eta_list[i].item():.4g}")
                          else:
                              print(f"  Task {i}: Loss={val:.4g} too small, keeping eta=0.")
+                     
+                     # Scale eta_list sum to 1
+                     eta_sum = self.eta_list.sum()
+                     if torch.abs(eta_sum) > 1e-6:
+                         self.eta_list.div_(eta_sum)
+                         print(f"  Sum of eta_list scaled from {eta_sum.item():.4g} to 1.0")
+                         for i in range(self.num_tasks):
+                             print(f"    Task {i}: Final auto-set eta={self.eta_list[i].item():.4g}")
+                 
                  self.is_initialized = True
 
         total_loss = 0
