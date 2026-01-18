@@ -135,5 +135,34 @@ def find_range_for_certain_percentage(data, percentage=80, offset=0):
     return ret
 
 
+def trimmed_mean(data:Sequence[float], remove = 0.1):
+    """
+    Calculate the trimmed mean by removing the top and bottom 10% of data points. This is to prevent noise interference.
+    :param data: List of numerical values.
+    :param remove: if <1: Proportion of data to trim from each end (default is 0.1 for 10%).
+                   if >=1: Number of data points to trim from each end.
+    :return: .
+    """
+    if not data:
+        raise ValueError("Trimmed_mean is given an empty Data list is empty.")
+
+    if remove >=1:
+        trim_count = int(remove)
+    else:
+        trim_count = int(len(data) * remove)
+    
+    if trim_count == 0:
+        return average(data)
+    
+    data = sorted(data)    
+    # 如果裁完了一个都不剩，返回最中间的值
+    if len(data) <= 2 * trim_count:
+        cut = math.ceil(len(data)/2)-1
+        return average(data[cut:-cut])
+
+    data = data[trim_count:-trim_count]
+    return average(data)
+
+
 if __name__ == '__main__':
     pass
