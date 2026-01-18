@@ -1078,7 +1078,7 @@ class Train_NN_Network:
                 self.test_evaluations_history[i].append(val)
                 current_test_evals.append(val)
 
-            info_text = f"[按C停训] Epoch {str(self.epoch).rjust(len(str(self.max_epoch)))}/{self.max_epoch} | "
+            info_text = f"Epoch {str(self.epoch).rjust(len(str(self.max_epoch)))}/{self.max_epoch} | "
             info_text += f"Loss{smart_format_float(self.training_losses[-1], 4):>7}/{smart_format_float(test_loss, 4):<7}"
 
             for name, train_val, test_val in zip(self.non_opt_evaluation_function_names,
@@ -1112,7 +1112,7 @@ class Train_NN_Network:
                 print_training_speed = (time.time() - self.training_start_time) / self.epoch * print_training_speed_epochs
                 print_training_speed = f"{print_time_difference(print_training_speed, width=0)}/{print_training_speed_epochs} Epoch{'s' if print_training_speed_epochs > 1 else ''}"
 
-                print(f'{info_text} | Time: {print_elapsed_time} | {print_training_speed}')
+                print(f'[按C停训] {info_text} | Time: {print_elapsed_time} | {print_training_speed}')
 
             ############ Plotting ############
             active_windows: List[Plot] = []
