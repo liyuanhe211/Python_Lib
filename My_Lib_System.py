@@ -7,6 +7,7 @@ Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
 sys.path.append(Python_Lib_path)
 from My_Lib_Stock import *
 import platform
+import pyautogui
 
 # Cross-platform keyboard detection
 if platform.system() == 'Windows':
@@ -17,10 +18,8 @@ else:
     import tty
 
 def screen_capture(output_filename):
-    import pyautogui
     myScreenshot = pyautogui.screenshot()
     myScreenshot.save(output_filename)
-
 
 def hide_cwd_window():
     import ctypes
