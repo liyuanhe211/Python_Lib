@@ -207,7 +207,7 @@ def file_is_busy(filepath):
         return False
 
 
-def get_unused_filename(input_filename, replace_hash=True, use_proper_filename=True):
+def get_unused_filename(input_filename, replace_hash=True):
     """
     verify whether the filename is already exist, if it is, a filename like filename_01.append; filename_02.append will be returned.
     maximum 99 files can be generated
@@ -219,10 +219,7 @@ def get_unused_filename(input_filename, replace_hash=True, use_proper_filename=T
 
     input_filename = os.path.realpath(input_filename)
 
-    if use_proper_filename:
-        input_filename = proper_filename(input_filename, replace_hash=replace_hash)
-
-    if not os.path.isfile(input_filename) and not os.path.isdir(input_filename):
+    if not os.path.exists(input_filename):
         # 是新的
         return input_filename
     else:
@@ -235,12 +232,8 @@ def get_unused_filename(input_filename, replace_hash=True, use_proper_filename=T
 
         number = 1
         ret = no_append + "_" + '{:0>2}'.format(number) + (('.' + append) if append else "")
-        while os.path.isfile(ret) or os.path.isdir(ret):
+        while os.path.exists(ret):
             number += 1
-            if number == 9999:
-                Qt.QMessageBox.critical(None, "YOU HAVE 9999 INPUT FILE?!", "AND YOU DON'T CLEAN IT?!",
-                                        Qt.QMessageBox.Ok)
-                break
             ret = no_append + "_" + '{:0>2}'.format(number) + (('.' + append) if append else "")
 
         return ret
