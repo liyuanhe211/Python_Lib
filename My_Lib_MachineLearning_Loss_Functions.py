@@ -166,6 +166,87 @@ def loss_function_group_pairwise_MSE(Ys_pred, Ys_true, Tags):
         return torch.tensor(0.0, device=Ys_pred.device, requires_grad=True)
 
 
+def cap_output_range_loss(Ys_pred, Ys_true=None, Tags=None, min=None, max=None, penalty_weight=10.0):
+    """
+    A penalty for predictions outside the [min, max] range.
+        
+    Args:
+        Ys_pred: (Batch, Features) or (Batch,) Predicted values. 
+        min (float, list, or np.ndarray, optional): Lower bound. 
+            If Ys_pred has multiple features, this can be a list/array with length matching the number of features.
+            If scalar, it applies to all features.
+        max (float, list, or np.ndarray, optional): Upper bound.
+            If Ys_pred has multiple features, this can be a list/array with length matching the number of features.
+            If scalar, it applies to all features.
+        penalty_weight (float, optional): Weight for the penalty term. Default is 10.0.
+        
+    The penalty is calculated as:
+        Loss_total = Loss_original + penalty_weight * (ReLU(min - pred)^2 + ReLU(pred - max)^2)
+        
+    Explanation of Ratio (Penalty vs Original):
+        The 'penalty_weight' determines how strictly the boundary is enforced relative to the task loss.
+        - The penalty is quadratic (squared error of the violation).
+        - If penalty_weight is high (e.g., >10), the gradient from the boundary violation will dominate
+        when the prediction is significantly out of bounds, pushing the model back into the valid range.
+        - The exact ratio depends on the magnitude of the original loss. If the original loss (like MSE)
+        is small (e.g., < 0.1), a weight of 10.0 provides a very strong constraint.
+    """
+    if min is None and max is None:
+        raise ValueError("At least one of min or max must be provided.")
+    
+    # Get dimensions and device
+    num_features = Ys_pred.shape[1] if Ys_pred.dim() > 1 else 1
+    device = Ys_pred.device
+    
+    # Process bounds: convert to tensors with proper shape
+    bounds = {}
+    for bound_name, bound_val in [('min', min), ('max', max)]:
+        if bound_val is None:
+            bounds[bound_name] = None
+            continue
+        
+        # Check if scalar, convert to list if so
+        is_scalar = isinstance(bound_val, (int, float)) or (isinstance(bound_val, torch.Tensor) and bound_val.numel() == 1)
+        if is_scalar:
+            bound_val = bound_val.item() if isinstance(bound_val, torch.Tensor) else bound_val
+            bound_val = [bound_val] * num_features
+        
+        # Convert to tensor
+        bound_t = torch.tensor(bound_val, device=device, dtype=torch.float32) if not isinstance(bound_val, torch.Tensor) else bound_val.to(device)
+        
+        # Validate length
+        if bound_t.numel() != num_features:
+            raise ValueError(f"{bound_name} has {bound_t.numel()} elements but Ys_pred has {num_features} features.")
+        
+        # Reshape for broadcasting if Ys_pred is 2D
+        if Ys_pred.dim() > 1:
+            bound_t = bound_t.view(1, -1)
+        
+        bounds[bound_name] = bound_t
+    
+    # Calculate loss
+    loss = torch.tensor(0.0, device=device)
+    
+    if bounds['min'] is not None:
+        loss += torch.mean(torch.relu(bounds['min'] - Ys_pred) ** 2)
+    
+    if bounds['max'] is not None:
+        loss += torch.mean(torch.relu(Ys_pred - bounds['max']) ** 2)
+    
+    return penalty_weight * loss
+
+
+def cap_output_range_loss_decorator(func, min=None, max=None, penalty_weight=10.0):
+    """
+    Decorator version of cap_output_range_loss in case you are not using this in Train_NN_Network.
+    """
+    def wrapper(Ys_pred, Ys_true, *args, **kwargs):
+        loss = func(Ys_pred, Ys_true, *args, **kwargs)
+        return loss + cap_output_range_loss(Ys_pred, Ys_true, min=min, max=max, penalty_weight=penalty_weight)
+        
+    return wrapper
+
+
 class Uncertainty_Weighted_Loss(nn.Module):
     """
     Automatically weighted multi-task loss based on uncertainty.
