@@ -59,11 +59,32 @@ def read_xlsx(file, sheet=0, all_sheets=False):
         import collections
         ret = collections.OrderedDict()
         for key, value in data.items():
-            ret[key] = same_length_2d_list(value)
+            if value:
+                ret[key] = same_length_2d_list(value)
         return ret
     else:
         ret = data[list(data)[sheet]]
-        return same_length_2d_list(ret)
+        if ret:
+            return same_length_2d_list(ret)
+
+
+def list_2D_with_header_to_xyz_triples(input_list_2D, X_along_row=True):
+    """
+    convert a 2D list with header row and header column to a list of xyz triples
+    :param input_list_2D:
+    :return: a list of triples, each triple is a list of [X (value in row 1), Y (value in column 1), cell_value]
+    """
+    ret = []
+    if X_along_row:
+        for row in input_list_2D[1:]:
+            for col_index, cell in enumerate(row[1:]):
+                ret.append([input_list_2D[0][col_index + 1], row[0], cell])
+    else:
+        for col_index in range(1, len(input_list_2D[0])):
+            for row_index, row in enumerate(input_list_2D[1:]):
+                ret.append([row[0], input_list_2D[0][col_index], row[col_index]])
+    ret.sort()
+    return ret
 
 
 def read_xlsx_to_list_of_dicts(filename):
