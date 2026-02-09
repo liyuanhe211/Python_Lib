@@ -102,6 +102,9 @@ def smart_format_float(num, precision=3, scientific_notation_limit=5):
 
     """
 
+    if not is_float(num):
+        return str(num)
+
     if is_torch_tensor(num):
         num = num.item()
 

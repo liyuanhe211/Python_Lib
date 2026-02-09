@@ -206,11 +206,11 @@ class Qt_Widget_Common_Functions:
         if activate_window:
             self.window().activateWindow()
 
-    def closeEvent(self, event: QtGui.QCloseEvent):
+    def closeEvent(self, a0: QtGui.QCloseEvent):
         # print("Window {} closed".format(self))
         self.closing.emit()
         if hasattr(super(), "closeEvent"):
-            return super().closeEvent(event)
+            return super().closeEvent(a0)
 
     def open_config_file(self):
         self.config = open_config_file()
