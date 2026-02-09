@@ -27,6 +27,7 @@ import matplotlib.patches as patches
 from matplotlib.figure import Figure
 from scipy.interpolate import interp1d, griddata, Rbf, bisplrep, bisplev, RectBivariateSpline
 from scipy.ndimage import gaussian_filter
+from scipy import interpolate
 import matplotlib.font_manager as font_manager
 import operator
 import colorsys
@@ -2157,6 +2158,270 @@ def xyz_triples_to_2D_list(xyz_triples, default_value="", print_table=True, outp
         print("File saved to:", output_file)
 
     return Xs, Ys, Z_matrix
+
+
+def plot_2D_scatter_surface_matplotlib(_X, _Y, _Z, X_Label="X axis", Y_Label="Y axis", color_scale_percentage=80, traces_list=[], color_map_shift=0,
+                                       override_color_scale=None, without_colorfill=False):
+    '''
+
+    :param _X:
+    :param _Y:
+    :param _Z:
+    :param X_Label:
+    :param Y_Label:
+    :param color_scale_percentage:
+    :param traces_list: a list of list, [[trace1_x,trace1_y],[trace2_x,trace2_y]]
+    :param color_map_shift: a number, if it is 0.1, then the color map will be shifted up for 10% of max(Z)-min(Z)
+    :return:
+    '''
+    from mpl_toolkits.mplot3d import Axes3D
+    import matplotlib.pyplot as plt
+    from matplotlib.pyplot import figure
+    import matplotlib.tri as tri
+    from scipy import interpolate
+    import matplotlib
+    import numpy as np
+
+    min_X = min(_X)
+    max_X = max(_X)
+    dist_X = max_X - min_X
+    X_range = [min_X, max_X]
+
+    print("Min, max, dist of X:", min_X, max_X, dist_X, X_range)
+
+    min_Y = min(_Y)
+    max_Y = max(_Y)
+    dist_Y = max_Y - min_Y
+    Y_range = [min_Y, max_Y]
+
+    print("Min, max, dist of Y:", min_Y, max_Y, dist_Y, Y_range)
+
+    ranges_for_imshow = X_range + Y_range
+    ranges_for_contours = X_range + list(reversed(Y_range))
+
+    figure(figsize=(10, 3.5), facecolor='w', edgecolor='k')
+    matplotlib.rcParams.update({'font.size': 8})
+    matplotlib.rcParams.update({'font.family': "Arial"})
+
+    if dist_Y > dist_X:
+        grid_x = 200
+        grid_y = int(grid_x / dist_X * dist_Y)
+        # 限制最多10:1的长宽比
+        grid_y = min(grid_y, 10 * grid_x)
+    else:
+        grid_y = 200
+        grid_x = int(grid_y / dist_Y * dist_X)
+        # 限制最多10:1的长宽比
+        grid_x = min(grid_x, 10 * grid_y)
+
+    new_x_values = np.linspace(min_X, max_X, grid_x)
+    new_y_values = np.linspace(min_Y, max_Y, grid_y)
+
+    print('')
+    print("Num of New X/Y Values:", len(new_x_values), len(new_y_values))
+    # no idea how this works, just generate a list of 2-tuples, with all combination of new_x_values and new_y_values, x in front
+    # new_Xs_meshgrid, new_Ys_meshgrid = np.meshgrid(new_x_values, new_y_values)
+    meshgrid = np.array(np.meshgrid(new_x_values, new_y_values)).T.reshape(-1, 2)
+    new_X_grid, new_Y_grid = meshgrid[:, 0], meshgrid[:, 1]  # 各自为一个一维向量，二者并在一起是X和Y所有点的组合
+    print("New X,Y Grid size:", new_X_grid.shape, new_Y_grid.shape)  # should all be grid_x*grid_y
+
+    from scipy.interpolate import griddata
+    new_Zs_grid_matplotlib = griddata((_X, _Y), _Z, (new_x_values[None, :], new_y_values[:, None]), method='cubic')
+    print(new_Zs_grid_matplotlib.shape)
+
+    new_Zs_list = []
+    for x in range(grid_x):
+        for y in range(grid_y):
+            new_Zs_list.append(new_Zs_grid_matplotlib[y][x])
+    new_Zs_list = np.array(new_Zs_list)
+
+    print(new_Zs_list.shape)
+
+    if not override_color_scale:
+        color_scale_range = find_range_for_certain_percentage(_Z, color_scale_percentage, color_map_shift)
+    else:
+        color_scale_range = override_color_scale
+    # color_map = plt.cm.coolwarm
+    color_map = plt.cm.Spectral_r
+
+    color_normalize = matplotlib.cm.colors.Normalize(vmin=color_scale_range[0], vmax=color_scale_range[1])
+    planar_subplot = plt.subplot2grid((1, 2), (0, 0), colspan=1)
+    if not without_colorfill:
+        planar_subplot.contour(new_x_values, new_y_values, new_Zs_grid_matplotlib, levels=30,
+                               colors='k', linewidths=0.3, linestyles='dashed')
+    else:
+        planar_subplot.contour(new_x_values, new_y_values, new_Zs_grid_matplotlib, levels=30,
+                               colors='k', linewidths=3)
+
+    x_lim = planar_subplot.get_xlim()
+    y_lim = planar_subplot.get_ylim()
+
+    discard_first_n_points = 20  # to hide the starting point
+
+    for trace in traces_list:
+        if trace[0][-1] > trace[1][-1]:
+            planar_subplot.plot(trace[0][discard_first_n_points:], trace[1][discard_first_n_points:], '-', color='#C818FD', linewidth=0.3)
+        else:
+            planar_subplot.plot(trace[0][discard_first_n_points:], trace[1][discard_first_n_points:], '-', color='#FC4242', linewidth=0.3)
+    planar_subplot.set_xlim(x_lim)
+    planar_subplot.set_ylim(y_lim)
+
+    if not without_colorfill:
+        contourf_object = planar_subplot.contourf(new_x_values, new_y_values, new_Zs_grid_matplotlib, levels=500,
+                                                  cmap=color_map,
+                                                  extent=ranges_for_imshow,
+                                                  norm=color_normalize)
+        fig = plt.gcf()
+        fig.colorbar(contourf_object, ax=planar_subplot)
+        planar_subplot.set_xlabel(X_Label)
+        planar_subplot.set_ylabel(Y_Label)
+
+    planar_subplot = plt.subplot2grid((1, 2), (0, 1), colspan=1)
+    planar_subplot.tricontour(_X, _Y, _Z, levels=20,
+                              colors='k', linewidths=0.3)
+
+    contourf_object = planar_subplot.tricontourf(_X, _Y, _Z, levels=255,
+                                                 cmap=color_map,
+                                                 extent=ranges_for_imshow,
+                                                 norm=color_normalize)
+    fig = plt.gcf()
+    fig.colorbar(contourf_object, ax=planar_subplot)
+    planar_subplot.set_xlabel(X_Label)
+    planar_subplot.set_ylabel(Y_Label)
+
+    plt.show()
+
+
+def plot_2D_scatter_surface_mayavi(_X, _Y, _Z, X_Label="X axis", Y_Label="Y axis", color_scale_percentage=80, traces_list=[]):
+    """
+    Plot a color mapped f(x,y)=z surface that can be rotated
+    :param _X: 
+    :param _Y: 
+    :param _Z: 
+    :param X_Label: 
+    :param Y_Label:
+    :param color_scale_percentage: 
+    :param traces_list: 
+    :return: 
+    """
+
+    from mayavi import mlab
+
+    min_X = min(_X)
+    max_X = max(_X)
+    dist_X = max_X - min_X
+    X_range = [min_X, max_X]
+
+    min_Y = min(_Y)
+    max_Y = max(_Y)
+    dist_Y = max_Y - min_Y
+    Y_range = [min_Y, max_Y]
+
+    grid = 300
+
+    if dist_Y > dist_X:
+        grid_x = grid
+        grid_y = int(grid_x / dist_X * dist_Y)
+        # 限制最多10:1的长宽比
+        grid_y = min(grid_y, 10 * grid_x)
+    else:
+        grid_y = grid
+        grid_x = int(grid_y / dist_Y * dist_X)
+        # 限制最多10:1的长宽比
+        grid_x = min(grid_x, 10 * grid_y)
+
+    new_x_list = np.linspace(min_X, max_X, grid_x)
+    new_y_list = np.linspace(min_Y, max_Y, grid_y)
+    new_x_matrix, new_y_matrix = np.mgrid[min_X:max_X:grid_x * 1j, min_Y:max_Y:grid_y * 1j]
+    new_Zs_grid = interpolate.griddata((_X, _Y), _Z, (new_x_list[None, :], new_y_list[:, None]), method='cubic').T
+
+    def interpolation_function(x, y, x_list, y_list, Zs_grid):
+
+        x_pos = len(x_list) - 1
+        y_pos = len(y_list) - 1
+        for x_try in range(len(x_list)):
+            if x_list[x_try] > x:
+                x_pos = x_try
+                break
+        for y_try in range(len(y_list)):
+            if y_list[y_try] > y:
+                y_pos = y_try
+                break
+
+        return Zs_grid[x_pos][y_pos]
+
+    print(new_x_matrix.shape, new_y_matrix.shape)
+    print(new_Zs_grid.shape)
+
+    color_range = find_range_for_certain_percentage(_Z, color_scale_percentage)
+    # generate a matrix for 2D-color-mapped plot only, as the color map range is not correctly mapped in mayavi for 2D imshow
+    new_Zs_grid_fix_color_range = np.copy(new_Zs_grid)
+    new_Zs_grid_fix_color_range[new_Zs_grid_fix_color_range > color_range[1]] = color_range[1]
+    new_Zs_grid_fix_color_range[new_Zs_grid_fix_color_range < color_range[0]] = color_range[0]
+
+    extent_XY = [min_X, max_X, min_Y, max_Y]
+    print(extent_XY)
+    z_extent = [np.nanmin(new_Zs_grid) / 100, np.nanmax(new_Zs_grid) / 100]
+    z_extent_factor = 0.01
+    z_extent = [np.nanmin(new_Zs_grid) * z_extent_factor, np.nanmax(new_Zs_grid) * z_extent_factor]
+    z_label = "Electronic Energy (×" + str(1 / z_extent_factor) + 'kJ/mol)'
+    print(z_label)
+
+    # 可能需要调整X、Y的范围（横向缩放），否则画出来是条纵向的线
+    mlab.clf()
+    mlab.figure(bgcolor=(1, 1, 1), size=(1500, 1500), fgcolor=(0, 0, 0))
+
+    # draw_a_line_in_mayavi((0,0,0),(0,0,3))
+    # draw_a_line_in_mayavi((0, 0, 0), (0, 3, 0))
+    # draw_a_line_in_mayavi((0, 0, 0), (3, 0, 0))
+
+    mlab.imshow(new_Zs_grid_fix_color_range, extent=extent_XY + [0, 0], vmin=color_range[0] / 10, vmax=color_range[1] / 10)
+    s = mlab.mesh(new_x_matrix, new_y_matrix, new_Zs_grid,
+                  vmin=color_range[0], vmax=color_range[1],
+                  extent=extent_XY + z_extent)
+
+    # plot the trajectory
+    for traceXY in traces_list:
+        tube_radius = 0.003
+        traceX, traceY = traceXY
+        discard_first_n_points = 20  # to hide the starting point
+        traceX = traceX[discard_first_n_points:]
+        traceY = traceY[discard_first_n_points:]
+        traceZ = [interpolation_function(x, traceY[count], new_x_list, new_y_list, new_Zs_grid) * z_extent_factor + tube_radius * 10 for count, x in
+                  enumerate(traceX)]
+
+        temp_X = []
+        temp_Y = []
+        temp_Z = []
+
+        for trace_count, trace_pointX in enumerate(traceX):
+            trace_pointY = traceY[trace_count]
+            trace_pointZ = traceZ[trace_count]
+            if not math.isnan(trace_pointZ):
+                temp_X.append(trace_pointX)
+                temp_Y.append(trace_pointY)
+                temp_Z.append(trace_pointZ)
+
+        traceX, traceY, traceZ = temp_X, temp_Y, temp_Z
+        if traceX:
+            if traceX[-1] < traceY[-1]:
+                mlab.plot3d(traceX, traceY, traceZ, color=(0xfc / 0xff, 0x42 / 0xff, 0x42 / 0xff), representation='surface', tube_radius=tube_radius)
+            else:
+                mlab.plot3d(traceX, traceY, traceZ, color=(0xc8 / 0xff, 0x18 / 0xff, 0xfd / 0xff), representation='surface', tube_radius=tube_radius)
+
+    mlab.colorbar(s, nb_colors=256, nb_labels=10, label_fmt='%.0f', orientation="vertical")
+
+    x_ticks, y_ticks, z_ticks = get_appropriate_ticks(X_range), get_appropriate_ticks(Y_range), get_appropriate_ticks(z_extent)
+    print(x_ticks, y_ticks, z_ticks)
+    tick_counts = [int((a[1] - a[0]) / a[2]) for a in (x_ticks, y_ticks, z_ticks)]
+    axis_object = mlab.axes(s, color=(0, 0, 0), extent=extent_XY + z_extent, nb_labels=5, ranges=x_ticks[0:2] + y_ticks[0:2] + z_ticks[0:2],
+                            xlabel=X_Label, ylabel=Y_Label, zlabel=z_label)
+    axis_object.label_text_property.font_family = 'arial'
+    axis_object.label_text_property.font_size = 3
+    axis_object.title_text_property.font_family = 'arial'
+    axis_object.title_text_property.font_size = 3
+
+    mlab.show()
 
 
 if __name__ == "__main__":
