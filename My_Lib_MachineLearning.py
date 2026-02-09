@@ -9,10 +9,6 @@ import sys
 import pathlib
 import traceback
 
-
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -43,25 +39,27 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
 
-from Python_Lib.My_Lib import *
-from Python_Lib.My_Lib_Plot import *
-from Python_Lib.My_Lib_Office import *
-from Python_Lib.My_Lib_System import non_block_keyboard_interrupt, disable_keyboard_interrupt, enable_keyboard_interrupt
-from Python_Lib.My_Lib_MachineLearning_Models_Public import *
 
+Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
+sys.path.append(Python_Lib_path)
+from My_Lib import *
+from My_Lib_Plot import *
+from My_Lib_Office import *
+from My_Lib_System import non_block_keyboard_interrupt, disable_keyboard_interrupt, enable_keyboard_interrupt
+from My_Lib_MachineLearning_Loss_Functions import *
+from My_Lib_MachineLearning_Utilities import Training_Control_Panel
+from My_Lib_MachineLearning_Models_Public import *
 try:
-    from Python_Lib.My_Lib_MachineLearning_Models_Private import *
+    from My_Lib_MachineLearning_Models_Private import *
 except ImportError:
     print("Using only public models in Python_Lib.")
-
-from Python_Lib.My_Lib_MachineLearning_Loss_Functions import *
 
 # Set matplotlib backend (should be done before importing pyplot)
 matplotlib.use("QtAgg")
 
 ML_RANDOM_SEED = 20211021
 DEFAULT_INITIAL_EPOCH = 2000
-DEFAULT_PLOT_SIZE = (3.6, 3.2)
+DEFAULT_PLOT_SIZE = (3*1.1, 2.8*1.1)
 DEFAULT_PLOT_FONT_SIZE = 9
 
 # Set random seed to ensure reproducibility
@@ -212,7 +210,7 @@ def dataset_normalization(X, Y, *forward_norm_functions):
                     combined[:, i] = midpoint
 
                     def inv_func(transformed_value, _m=min_, shifted_to=midpoint):
-                        return transformed_value + val - midpoint
+                        return transformed_value + _m - shifted_to
                 else:
                     range_ = max_ - min_
                     scale_ = (ub - lb) / range_
@@ -428,8 +426,15 @@ class Multitask_Strategy:
     GradNorm = "GradNorm_03q984gh0398hg98whmf028934fmxisfuvhn9340gh2937fh9w8df"
 
 
+class Schedular_Strategy:
+    No_Schedular = "No_Schedular_q03948hg3m0q94gh0293mg02974gfmw9d8hcw90"
+    CyclicLR = "CyclicLR_q03948hg3m0q94gh0293mg02974gfmw9d8hcw90"
+    CosineAnnealingWarmRestarts = "CosineAnnealingWarmRestarts_q03948hg3m0q94gh0293mg02974gfmw9d8hcw90"
+    Custom = "Custom_q03948hg3m0q94gh0293mg02974gfmw9d8hcw90"
+
+
 class GradNorm_Manager(nn.Module):
-    """
+    r"""
     GradNorm: <Gradient Normalization for Adaptive Loss Balancing in Deep Multitask Networks (ICML 2018)>
     利用反向传播的梯度幅度来动态调整权重。引入了损失函数L_grad更新任务权重。
     Computes the gradient norm $G_i$ for each task $i$'s loss with respect to the shared layer weights
@@ -445,7 +450,7 @@ class GradNorm_Manager(nn.Module):
     Task weights $w_i$ are updated by minimizing the function $L_{grad} = \sum_i |G_i - G_{target}^{(i)}|_1$.
     """
 
-    def __init__(self, n_tasks, model: nn.Module, device, alpha=3, lr=0.1):
+    def __init__(self, n_tasks, model: nn.Module, device, alpha=1.5, lr=0.1):
         super().__init__()
         self.n_tasks = n_tasks
         self.model = model
@@ -595,7 +600,37 @@ class GradNorm_Manager(nn.Module):
              self.shared_weights = final_shared_param
 
 
-# TODO: 处理输入的类型问题
+def build_CosineAnnealingWarmRestarts_scheduler(optimizer, T_0=20, T_mult=2, eta_min=1e-6):
+    return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0, T_mult=T_mult, eta_min=eta_min)
+
+def build_CyclicLR_scheduler(optimizer, 
+                             base_lr=None, 
+                             max_lr=None, 
+                             step_size_up=10, 
+                             step_size_down = 40, 
+                             mode:Literal['triangular', 'triangular2', 'exp_range']="triangular", 
+                             gamma=0.99994,
+                             last_epoch=-1):
+    if max_lr is None:
+        # Infer from optimizer
+        if optimizer.param_groups:
+             max_lr = optimizer.param_groups[0].get('lr', 0.001)
+        else:
+             max_lr = 0.001
+    
+    if base_lr is None:
+        base_lr = max_lr / 100.0
+        
+    return torch.optim.lr_scheduler.CyclicLR(optimizer, 
+                                             base_lr=base_lr, 
+                                             max_lr=max_lr, 
+                                             step_size_up=step_size_up, 
+                                             step_size_down=step_size_down,
+                                             mode=mode, 
+                                             gamma=gamma, 
+                                             last_epoch=last_epoch)
+
+
 class Train_NN_Network:
     def __init__(self,
                  model: nn.Module,
@@ -615,13 +650,20 @@ class Train_NN_Network:
                  #   Multitask_Strategy.Uncertainty_Weighted_Loss
                  #   Multitask_Strategy.GradNorm
 
-                 scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
+                 scheduler: Union[torch.optim.lr_scheduler.LRScheduler, 
+                                  Literal['CyclicLR', 'CosineAnnealingWarmRestarts'], 
+                                  None] = "CyclicLR",
                  
                  *,
                  Xs_train: torch.Tensor,  # should be normalized
                  Ys_train: torch.Tensor,  # should be normalized
                  Xs_test: torch.Tensor,  # should be normalized
                  Ys_test: torch.Tensor,  # should be normalized
+
+                 # y range_cap is a list of (min, max) for each output dimension, used to add additional penalty for going out of range, only works if Y is 1D
+                 # 例如，约定产率不能低于0或者高于1
+                 y_range_cap:Optional[Sequence[Optional[float]]] = None, 
+
                  Tags_train: Optional[torch.Tensor] = None,  # (Num_Entries, N_Tags) Optional tags for each training data, in case it in needed for grouping dependent loss function
                  Tags_test: Optional[torch.Tensor] = None,   # (Num_Entries, N_Tags) Optional tags for each training data
 
@@ -629,14 +671,30 @@ class Train_NN_Network:
                  batch_by_tag = False,  # If True, each batch contains data with the same tag. Only works when Tags_train/test is given.
                  shuffle = True,
 
-                 ########## Optimization helpers ##########
+                 # (Y_min, Y_max) to add additional penalty for going out of range, only works if Y is 1D 
+                 # performed through cap_output_range_loss
+                 # Specify (Y_min, None) or (None, Y_max) for one-sided capping
+                 
+                 ########## Output shape check ##########
+                 # 一般来说，Ys_pred和Ys_known的shape应该是一样的
+                 # 但是比如紫外光谱的offset recovery, predict 输出的是offset的位置和大小，known是光谱，从位置/大小到光谱是在loss function里转换的，就应该inhibit
+                 inhibit_output_shape_check = False,
+
+                 ########## Device selection ##########
                  device=None,
-                 max_gradient_norm=None,
+                 
+                 ########## Optimization helpers ##########
+
+                 # set float(inf) or None for no clipping, 
+                 # other float for fixed max value, 
+                 # "Auto" for automatic setting based on Adaptive Heuristic Strategy
+                 max_gradient_norm:Union[str,float,None]="Auto", 
 
                  ########## Stop conditions ##########
-                 initial_max_epoch=None,
-                 ask_after_max_epoch=True,
+                 initial_max_epoch:Optional[int]=None,
+                 absolute_max_epoch:Optional[int] = None,
                  automatic_extension=True,
+                 ask_before_termination=True,
                  loss_weight_convergence_threshold=1e-3, # 在使用多个loss function需要weighting的情况下，loss weight必须在最后10%的epoch里的变化程度小于这个比例才叫收敛
                  early_stopping_strategy=None,
                  # Can choose from: do not stop, or stop when testing data hasen't dropped for n cycles, then load the lowest one
@@ -692,9 +750,27 @@ class Train_NN_Network:
                 print("No GPUs available.")
         print()
 
+        ########## Gradient Norm Clipping ##########
+        self.max_gradient_norm = max_gradient_norm
+        self.auto_gradient_norm_mode = (max_gradient_norm == "Auto")
+        if self.auto_gradient_norm_mode:
+            print("Gradient clipping: Auto mode enabled")
+            self.gradient_norm_warmup_epochs = 10  # 至少要有10个epoch的数据才开始计算，否则20%就不到2个epoch没法计算
+            self.gradient_norm_k_factor = 1.5  # Multiplier for 90th percentile
+            self.gradient_norm_history = []  # Track gradient norms for each epoch: [[epoch1_batch_norms], [epoch2_batch_norms], ...]
+            self.gradient_norm_current_epoch_norms = []  # Collect batch norms within current epoch
+            self.gradient_norm_computed_threshold = None  # Will be set after warm-up
+            self.gradient_norm_last_adjustment_epoch = 0  # Track when we last adjusted
+        elif max_gradient_norm == float('inf') or max_gradient_norm is None:
+            print("Gradient clipping: Disabled")
+            self.max_gradient_norm = None
+        else:
+            print(f"Gradient clipping: Fixed threshold = {max_gradient_norm}")
+
         ########### Input checks ##########
         self.input_check(loss_functions, scheduler, Xs_train, Xs_test, Ys_train, Ys_test, Tags_train, Tags_test, batch_size, batch_by_tag, multitask_strategy)
         
+        ########### Save path and logging setup ##########
         if not save_path_stem:
             caller_frame = inspect.stack()[1]
             caller_full_path = os.path.abspath(caller_frame.filename)
@@ -707,6 +783,12 @@ class Train_NN_Network:
             save_folder = os.path.dirname(save_path_stem)
         
         save_path_stem = get_unused_filename(save_path_stem)
+        
+        dual_output_file = os.path.join(save_folder, "0_output.txt")
+        enable_dual_print(get_unused_filename(dual_output_file))
+
+        self.csv_output_file = os.path.join(save_folder, "0_optimization_history.csv")    
+        self.termination_filepath = os.path.join(save_folder, "0_Optimization_Finished_Successfully.txt")
 
         if save_script:
             # Save the caller script in the checkpoint folder
@@ -716,6 +798,12 @@ class Train_NN_Network:
             os.makedirs(dst_script_path, exist_ok=True)
             try:
                 shutil.copy2(caller_full_path, dst_script_path)
+                shutil.copy2(__file__, dst_script_path)
+                # find all files started with "My_Lib_MachineLearning" in the same folder as this file
+                other_files = [f for f in os.listdir(filename_parent(__file__)) if f.startswith("My_Lib_MachineLearning") and f.endswith(".py")]
+                for f in other_files:
+                    shutil.copy2(os.path.join(filename_parent(__file__), f), dst_script_path)
+
                 print(f"Original script {caller_full_path} backed up to {dst_script_path}")
             except Exception as e:
                 traceback.print_exc()
@@ -727,16 +815,16 @@ class Train_NN_Network:
 
         ######### Loss function(s) ##########
         # 要么是weighted_multiple_loss_mode = True，并且存在self.loss_functions作为一个数组
-        # 要么是weighted_multiple_loss_mode = False，并且存在self.loss_function作为单一函数
+        # 要么是weighted_multiple_loss_mode = False，self.loss_functions作为一个仅含一个函数的数组
 
         self.multitask_strategy = multitask_strategy
 
         if isinstance(loss_functions, Sequence) and len(loss_functions)==1:
-            self.loss_function = loss_functions[0]
+            self.loss_functions = [loss_functions[0]]
             self.weighted_multiple_loss_mode = False
         elif isinstance(loss_functions, Callable):
             self.weighted_multiple_loss_mode = False
-            self.loss_function = loss_functions
+            self.loss_functions = [loss_functions]
         elif isinstance(loss_functions, Sequence) and len(loss_functions)>1:
             self.weighted_multiple_loss_mode = True
             self.loss_functions = loss_functions
@@ -753,7 +841,23 @@ class Train_NN_Network:
                 # GradNorm Manager initialization
                 self.automatic_weighted_loss_model = GradNorm_Manager(len(loss_functions), self.model, self.device, lr=optimizer.defaults['lr'])
 
+        
         self.scheduler = scheduler
+        if isinstance(scheduler, str):
+            if scheduler == "CyclicLR":
+                 self.initial_lr = optimizer.param_groups[0].get('lr', 0.001)
+                 self.scheduler = build_CyclicLR_scheduler(self.optimizer, max_lr=self.initial_lr*2) # 平均LR为initial_lr
+                 self.schedular_type = Schedular_Strategy.CyclicLR
+            elif scheduler == "CosineAnnealingWarmRestarts":
+                 self.scheduler = build_CosineAnnealingWarmRestarts_scheduler(self.optimizer)
+                 self.schedular_type = Schedular_Strategy.CosineAnnealingWarmRestarts
+            else:
+                 raise ValueError(f"Unknown scheduler string: {scheduler}")
+        elif scheduler is None:
+            self.schedular_type = Schedular_Strategy.No_Schedular
+        else:
+            self.schedular_type = Schedular_Strategy.Custom
+            self.scheduler = scheduler
 
         self.save_path_stem = save_path_stem
         self.save_pngs = save_pngs
@@ -787,6 +891,11 @@ class Train_NN_Network:
                                            x_axis_label="Epoch",
                                            y_axis_label="Loss")
 
+        self.optimization_status_window = Plot(fig_size=DEFAULT_PLOT_SIZE,
+                                               font_size=DEFAULT_PLOT_FONT_SIZE,
+                                               x_axis_label="Epoch",
+                                               y_axis_label="Opt Status")
+
         if self.weighted_multiple_loss_mode:
             self.loss_terms_over_epoch_window = Plot(fig_size=DEFAULT_PLOT_SIZE,
                                                      font_size=DEFAULT_PLOT_FONT_SIZE,
@@ -812,11 +921,20 @@ class Train_NN_Network:
                                         x_axis_label="Input",
                                         y_axis_label="Output") for _ in range(len(self.plot_cases))]
 
-        all_windows = [self.linear_fit_window, self.loss_over_epoch_window] + self.plot_cases_windows + self.evaluation_over_epoch_windows
+        self.control_panel = Training_Control_Panel()
+        self.control_panel.stop_signal.connect(self.on_stop_training)
+        self.control_panel.show()
+
+        all_windows = [self.control_panel, self.linear_fit_window, self.loss_over_epoch_window] + self.plot_cases_windows + self.evaluation_over_epoch_windows
         if self.weighted_multiple_loss_mode:
             all_windows.append(self.loss_terms_over_epoch_window)
             all_windows.append(self.loss_weights_over_epoch_window)
             all_windows.append(self.loss_raw_over_epoch_window)
+        
+        all_windows.append(self.optimization_status_window)
+        
+        self.all_windows = all_windows
+        
         for window in all_windows:
             window.comrades = all_windows
 
@@ -830,10 +948,38 @@ class Train_NN_Network:
         self.batch_by_tag = batch_by_tag
         self.shuffle = shuffle
 
+        self.inhibit_output_shape_check = inhibit_output_shape_check
+
         self.Xs_train = self.Xs_train.to(self.device)
         self.Ys_train = self.Ys_train.to(self.device)
         self.Xs_test = self.Xs_test.to(self.device)
         self.Ys_test = self.Ys_test.to(self.device)
+
+        if not y_range_cap:
+            y_range_cap = [None,None]
+        if all(v is None for v in y_range_cap):
+            self.use_y_range_cap = False
+        else:
+            self.use_y_range_cap = True
+        self.y_cap_min = y_range_cap[0] if y_range_cap[0] is not None else float('-inf')
+        self.y_cap_max = y_range_cap[1] if y_range_cap[1] is not None else float('+inf')
+        if self.y_cap_max<=self.y_cap_min:
+            raise ValueError(f"Invalid cap_Y_range: max {self.y_cap_max} <= min {self.y_cap_min}")
+        
+        self.training_cap_loss_history = []
+        self.test_cap_loss_history = []
+
+        if not self.weighted_multiple_loss_mode:
+            self.non_opt_evaluation_functions.insert(0, self.loss_functions[0])
+            self.non_opt_evaluation_function_names.insert(0, "Original Loss Function")
+            
+            # We need a lambda or wrapper for cap loss eval that captures min/max
+            def cap_loss_eval(Ys_pred, Ys_true, *args):
+                return cap_output_range_loss(Ys_pred,
+                                                min=self.y_cap_min, 
+                                                max=self.y_cap_max)
+            self.non_opt_evaluation_functions.insert(1, cap_loss_eval)
+            self.non_opt_evaluation_function_names.insert(1, f"Cap Y Range Loss ({self.y_cap_min}, {self.y_cap_max})")
 
         if batch_size:
             dataset_object = TensorDataset(self.Xs_train, self.Ys_train, self.Tags_train)
@@ -850,9 +996,10 @@ class Train_NN_Network:
         if initial_max_epoch is None:
             initial_max_epoch = DEFAULT_INITIAL_EPOCH
         self.max_epoch = initial_max_epoch
+        self.absolute_max_epoch = absolute_max_epoch or float("inf")
 
         self.automatic_extension = automatic_extension
-        self.ask_after_max_epoch=ask_after_max_epoch
+        self.ask_before_termination=ask_before_termination
         self.loss_weight_convergence_threshold=loss_weight_convergence_threshold
 
         self.training_losses = []
@@ -865,10 +1012,33 @@ class Train_NN_Network:
         self.training_evaluations_history = [[] for _ in range(len(self.non_opt_evaluation_functions))]
         self.test_evaluations_history = [[] for _ in range(len(self.non_opt_evaluation_functions))]
         self.optimization_quality_history = []  # List of (epoch, is_good) tuples
+        
+        self.lr_history = []
+        
+        self.info_dicts = []
+
+        self.best_test_loss = float('inf')
+        self.best_test_loss_epoch = -1
+        if self.weighted_multiple_loss_mode:
+            self.best_test_loss_terms = [float('inf')] * len(self.loss_functions)
+            self.best_test_loss_terms_epochs = [-1] * len(self.loss_functions)
+
         self.last_save_epoch = 0
         self.last_print_epoch = 0
         self.last_plot_epoch = 0
         self.user_interrupted = False  # Flag for manual interruption by pressing 'C'
+
+        ########## Load from checkpoint if specified ##########
+        if load_from_save_path is not None:
+            self.load_checkpoint(load_from_save_path)
+            
+            # 针对Restart的修正：
+            # 加载的模型参数处于敏感区域，而新的Optimizer没有动量历史，容易产生震荡。
+            # 默认的Auto梯度裁剪需要预热10个epoch，期间没有保护，极易导致模型发散。
+            # 这里强制将预热期缩短为1个epoch，尽快启用梯度裁剪保护。
+            if self.auto_gradient_norm_mode:
+                print(f"Gradient clipping warmup reduced (10 -> 1) for pretrained model restart.")
+                self.gradient_norm_warmup_epochs = 1
 
         self.training_start_time = time.time()
         while self.epoch <= self.max_epoch:
@@ -879,10 +1049,11 @@ class Train_NN_Network:
             
             ############ Training loop ############
             self.training_loss = 0.
+            current_epoch_cap_loss = 0.0
+            
             current_epoch_training_evaluations = [0.0] * len(self.non_opt_evaluation_functions)
-            if self.weighted_multiple_loss_mode:
-                current_epoch_loss_terms = [0.0] * len(self.loss_functions)
-                current_epoch_weights = [0.0] * len(self.loss_functions)
+            current_epoch_loss_terms = [0.0] * len(self.loss_functions)
+            current_epoch_weights = [0.0] * len(self.loss_functions)
 
             for batch_data in batched_X_train_Y_train:
                 # Depending on how DataLoader unpacked it, it might be a list of tensors
@@ -895,6 +1066,11 @@ class Train_NN_Network:
                 Y_predict_train_batch = self.model(X_train_batch)
                 
                 batch_loss = self.evaluate_loss(Y_predict_train_batch, Y_train_batch, Tags_train_batch)
+                
+                if self.use_y_range_cap:
+                    current_epoch_cap_loss += cap_output_range_loss(Y_predict_train_batch,
+                                                                    min=self.y_cap_min,
+                                                                    max=self.y_cap_max).item()
 
                 if self.weighted_multiple_loss_mode:
                     for i, val in enumerate(self.automatic_weighted_loss_model.loss_terms):
@@ -921,8 +1097,9 @@ class Train_NN_Network:
                 else:
                     batch_loss.backward()
 
-                if max_gradient_norm:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_gradient_norm)
+                # Record gradient norm and apply clipping
+                self._record_and_clip_gradient()
+                
                 self.optimizer.step()
             
             num_batches = len(batched_X_train_Y_train)
@@ -937,10 +1114,21 @@ class Train_NN_Network:
                 current_epoch_weights = [x / num_batches for x in current_epoch_weights]
                 self.training_loss_terms_history.append(current_epoch_loss_terms)
                 self.training_weights_history.append(current_epoch_weights)
+            
+            if self.use_y_range_cap:
+                current_epoch_cap_loss /= num_batches
+                self.training_cap_loss_history.append(current_epoch_cap_loss)
 
             if self.scheduler is not None:
                 self.scheduler.step()
+                try: 
+                     self.lr_history.append(self.optimizer.param_groups[0]['lr'])
+                except:
+                     pass
             self.training_losses.append(self.training_loss)
+
+            # Update gradient norm threshold at end of epoch
+            self._update_gradient_norm_threshold()
 
             ############ Evaluation ############
             self.evaluate()
@@ -961,6 +1149,9 @@ class Train_NN_Network:
             if self.user_interrupted:
                 print(f"Training interrupted by user at epoch {self.epoch}.")
                 break
+        with open(self.termination_filepath, 'w') as f:
+            f.write("")
+        
 
     def is_good_optimization_epochs(self, check_epoch):
         """
@@ -974,10 +1165,18 @@ class Train_NN_Network:
             return True
 
         # 2. Check if loss is still dropping using trimmed mean comparison
+        to_print = ""
         for ratio in [0.05, 0.1, 0.2]:
             window_size = math.ceil(check_epoch * ratio)
             group1 = self.test_losses[check_epoch - window_size:check_epoch]
             group2 = self.test_losses[check_epoch - 2 * window_size:check_epoch - window_size]
+            if trimmed_mean(group1) < trimmed_mean(group2):
+                print(f"✔️  Good optimization at epoch {check_epoch} using trimmed mean with ratio {ratio}. Comparison of trimmed means:")
+            else:
+                print(f"❌ Bad optimization at epoch {check_epoch} using trimmed mean with ratio {ratio}. Comparison of trimmed means:")
+            print(f"        {check_epoch - window_size}-{check_epoch} epochs: {trimmed_mean(group1)} ")
+            print(f"        {check_epoch - 2 * window_size}-{check_epoch - window_size} epochs: {trimmed_mean(group2)}")
+
             if trimmed_mean(group1) < trimmed_mean(group2):
                 return True
                 
@@ -991,32 +1190,13 @@ class Train_NN_Network:
         time_check = time.time()
         if self.automatic_extension and self.epoch > 5:
             # Calculate all checkpoints with 5% geometric progression
-            # 例如，self.optimization_quality_history 可能是
-            # 
-            # 1209, False  |  1270, False  |  1334, True  |  1401, True  |  1472, False  |  1546, False  
-            # 1624, True  |  1706, True  |  1792, True  |  1882, True  |  1977, True  |  2076, True  |  
-            # 2180, True  |  2289, True  |  2404, True  |  2525, True  |  2652, False  |  2785, False  |  
-            # 2925, False  |  3072, False  |  3226, False  |  3388, False
-            # 
-            # 那么寻找最后一个连续是True的最大可能的阶段，此处是1547~2651，共1105个epoch
-            # 那么新的max_epoch就是2651 + 3*1105 = 5966
-
-            if not self.optimization_quality_history:
-                check_epoch = 5
-            else:
-                last_check_epoch = self.optimization_quality_history[-1][0]
-                check_epoch = math.ceil(last_check_epoch * 1.05)
-            while check_epoch <= self.epoch:
-                # Only calculate if not already in history
-                is_good = self.is_good_optimization_epochs(check_epoch)
-                self.optimization_quality_history.append((check_epoch, is_good))
-                check_epoch = math.ceil(check_epoch * 1.05)
+            self.update_optimization_quality_history()
 
             # Find last True and start of its continuous block
             last_True_region_start = 0
             last_True_region_end = self.max_epoch
 
-            if True in [x[1] for x in self.optimization_quality_history]:
+            if True in [x[1] for x in self.optimization_quality_history]: # 都是False不能用这个算法，先判断一下
                 optimization_history = [(0, False)] + self.optimization_quality_history + [(self.epoch+1, False)]
 
                 for i in range(1,len(optimization_history)-1):
@@ -1030,15 +1210,48 @@ class Train_NN_Network:
                         last_True_region_end = after[0]-1
                 
                 new_max_epoch = last_True_region_end + 3 * (last_True_region_end - last_True_region_start + 1)
-                if new_max_epoch > self.max_epoch:
-                    print("Good optimization trend detection list:")
-                    print(optimization_history)
-                    print(f"Extension to {new_max_epoch} based on optimization quality history (3x length of last good area).")
+                
+                print("Effective optimization trend list:")
+                for count,(epoch, is_good) in enumerate(self.optimization_quality_history):
+                    print(f"  Epoch {epoch} {'✔️ ' if is_good else '❌'}", end=' | ' if count%5!=4 else '\n')  
+                print()
+
+                if new_max_epoch > self.max_epoch and self.epoch <= self.absolute_max_epoch:
+                    print(f"Extension to {new_max_epoch} based on optimization quality history (2x length of last good area).")
                     self.max_epoch = new_max_epoch
+                    
+                    if self.schedular_type == Schedular_Strategy.CyclicLR:
+                        cycle_width = last_True_region_end - last_True_region_start + 1
+                        print(f"Updating CyclicLR scheduler with period={cycle_width}")
+                        
+                        new_step_size_up = math.ceil(cycle_width/2)
+                        new_step_size_down = cycle_width*2
+
+                        if hasattr(self.scheduler, 'step_size_up'):
+                             old_step_size_up = self.scheduler.step_size_up
+                        else:
+                             old_step_size_up = self.scheduler.total_size * self.scheduler.step_ratio
+
+                        # 因为两个scheduler的step_size_up不一样，所以需要缩放last_epoch保证相位一致，否则会导致LR的突变
+                        last_epoch_conversion = round(self.scheduler.last_epoch * (new_step_size_up / old_step_size_up)) - 1
+
+                        self.scheduler = build_CyclicLR_scheduler(self.optimizer, 
+                                                                  max_lr=self.initial_lr*2,
+                                                                  step_size_up=new_step_size_up, 
+                                                                  step_size_down=new_step_size_down,
+                                                                  last_epoch=last_epoch_conversion)
+                        self.scheduler.step() # Updates optimizer LR to the new phase
+
                     print("Time taken for optimization extension control:", time.time() - time_check)
                     return True
+                elif new_max_epoch <= self.max_epoch:
+                    print("No extension of max_epoch needed based on optimization quality history.")
+                    print("Time taken for optimization extension control:", time.time() - time_check)
+                    return True
+                elif self.epoch > self.absolute_max_epoch:
+                    print(f"Reached absolute max epoch of {self.absolute_max_epoch}. No further extension.")
 
-        if self.ask_after_max_epoch:
+        if self.ask_before_termination:
             disable_keyboard_interrupt()  # Disable keyboard interrupt before input()
             while True:
                 response = input(f'Max epoch {self.max_epoch} reached. To end the optimization, input "END"; otherwise input a new max_epoch number: ')
@@ -1051,6 +1264,318 @@ class Train_NN_Network:
                 self.max_epoch = int(response)
                 return True
 
+    def _record_and_clip_gradient(self):
+        """
+        Record gradient norm and apply clipping if needed.
+        Called after backward() in each batch.
+        """
+        if self.auto_gradient_norm_mode:
+            # Calculate and record the gradient norm (without clipping yet)
+            total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
+            self.gradient_norm_current_epoch_norms.append(total_norm.item())
+            
+            # Apply clipping if we're past warm-up
+            if self.epoch > self.gradient_norm_warmup_epochs and self.gradient_norm_computed_threshold is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.gradient_norm_computed_threshold)
+        elif self.max_gradient_norm is not None:
+            # Fixed threshold clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_gradient_norm)
+        # else: no clipping
+
+    def _update_gradient_norm_threshold(self):
+        """
+        Update gradient norm threshold at the end of each epoch.
+        Called after all batches in an epoch are processed.
+        """
+        if not self.auto_gradient_norm_mode:
+            return
+        
+        # Store current epoch's gradient norms
+        if self.gradient_norm_current_epoch_norms:
+            self.gradient_norm_history.append(self.gradient_norm_current_epoch_norms.copy())
+            self.gradient_norm_current_epoch_norms.clear()
+        
+        # Warm-up phase: just collect data
+        if self.epoch < self.gradient_norm_warmup_epochs:
+            return
+        
+        # After warm-up: calculate initial threshold
+        if self.epoch == self.gradient_norm_warmup_epochs:
+            # Flatten all gradient norms from warm-up epochs
+            all_warmup_norms = [norm for epoch_norms in self.gradient_norm_history for norm in epoch_norms]
+            grad_norms_tensor = torch.tensor(all_warmup_norms)
+            percentile_90 = torch.quantile(grad_norms_tensor, 0.9).item()
+            self.gradient_norm_computed_threshold = self.gradient_norm_k_factor * percentile_90
+            self.gradient_norm_last_adjustment_epoch = self.epoch
+            print(f"\n[Gradient Norm] Warm-up complete at epoch {self.epoch}.")
+            print(f"  - Computed threshold = {self.gradient_norm_computed_threshold:.4f}")
+            print(f"  - 90th percentile of norms: {percentile_90:.4f}")
+            print(f"  - k factor: {self.gradient_norm_k_factor}")
+            return
+        
+        # Dynamic adjustment: every 20% increase in epochs
+        epochs_since_last_adjustment = self.epoch - self.gradient_norm_last_adjustment_epoch
+        adjustment_interval = max(1, int(0.2 * self.gradient_norm_last_adjustment_epoch))
+        
+        if epochs_since_last_adjustment >= adjustment_interval:
+            # Calculate threshold from last 20% of epochs
+            window_size = int(0.2 * self.epoch)  # At least 2 epochs
+            recent_epoch_norms = self.gradient_norm_history[-window_size:]
+            # Flatten recent gradient norms
+            recent_norms = [norm for epoch_norms in recent_epoch_norms for norm in epoch_norms]
+            
+            if recent_norms:
+                grad_norms_tensor = torch.tensor(recent_norms)
+                percentile_90 = torch.quantile(grad_norms_tensor, 0.9).item()
+                old_threshold = self.gradient_norm_computed_threshold
+                self.gradient_norm_computed_threshold = self.gradient_norm_k_factor * percentile_90
+                self.gradient_norm_last_adjustment_epoch = self.epoch
+                print(f"\n[Gradient Norm] Threshold adjusted at epoch {self.epoch}")
+                print(f"  - Old threshold: {old_threshold:.4f}")
+                print(f"  - 90th percentile (last {window_size} epochs): {percentile_90:.4f}")
+                print(f"  - New threshold: {self.gradient_norm_computed_threshold:.4f}")
+            
+            # Keep only recent history to avoid memory bloat (keep last 30% of epochs)
+            max_history_epochs = max(50, int(0.3 * self.epoch))
+            if len(self.gradient_norm_history) > max_history_epochs:
+                self.gradient_norm_history = self.gradient_norm_history[-max_history_epochs:]
+
+    def load_checkpoint(self, checkpoint_path):
+        """
+        Load model parameters from a checkpoint file.
+        Only loads model state_dict, not optimizer state.
+        Validates that the model structure matches the checkpoint.
+        
+        Args:
+            checkpoint_path: Path to the .pth checkpoint file
+        """
+        print(f"\n{'='*60}")
+        print(f"Loading checkpoint from: {checkpoint_path}")
+        print(f"{'='*60}")
+        
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        
+        try:
+            # Load checkpoint
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            
+            # Extract model state dict
+            if 'model_state_dict' in checkpoint:
+                loaded_state_dict = checkpoint['model_state_dict']
+                loaded_epoch = checkpoint.get('epoch', 'unknown')
+            else:
+                # Assume the entire file is a state dict
+                loaded_state_dict = checkpoint
+                loaded_epoch = 'unknown'
+            
+            # Verify model structure compatibility
+            current_state_dict = self.model.state_dict()
+            
+            # Check if all keys match
+            loaded_keys = set(loaded_state_dict.keys())
+            current_keys = set(current_state_dict.keys())
+            
+            if loaded_keys != current_keys:
+                missing_keys = current_keys - loaded_keys
+                unexpected_keys = loaded_keys - current_keys
+                
+                error_msg = "Model structure mismatch detected:\n"
+                if missing_keys:
+                    error_msg += f"  Missing keys in checkpoint: {missing_keys}\n"
+                if unexpected_keys:
+                    error_msg += f"  Unexpected keys in checkpoint: {unexpected_keys}\n"
+                
+                raise ValueError(error_msg)
+            
+            # Check if tensor shapes match
+            shape_mismatches = []
+            for key in current_keys:
+                if current_state_dict[key].shape != loaded_state_dict[key].shape:
+                    shape_mismatches.append(
+                        f"  {key}: current={current_state_dict[key].shape}, "
+                        f"checkpoint={loaded_state_dict[key].shape}"
+                    )
+            
+            if shape_mismatches:
+                error_msg = "Tensor shape mismatch detected:\n" + "\n".join(shape_mismatches)
+                raise ValueError(error_msg)
+            
+            # Load the state dict
+            self.model.load_state_dict(loaded_state_dict)
+            
+            print(f"✓ Successfully loaded model parameters from epoch {loaded_epoch}")
+            print(f"✓ Model structure validated: {len(current_keys)} parameters matched")
+            print(f"✓ Current optimizer and training settings will be used")
+            print(f"{'='*60}\n")
+            
+        except Exception as e:
+            print(f"\n{'!'*60}")
+            print(f"ERROR: Failed to load checkpoint")
+            print(f"{'!'*60}")
+            raise e
+
+    def on_stop_training(self):
+        print("\nUser requested to STOP training.")
+        self.user_interrupted = True
+
+    def update_info_window(self):
+        if not self.info_dicts: return
+        self.control_panel.update_info(self.info_dicts[-1])
+
+        # Positioning Adjustment (Run only once after info is available/panel has size)
+        if not getattr(self, '_layout_adjusted', False):
+            # Ensure panel has geometry
+            if self.control_panel.isVisible():
+                 # Force process events to update geometry
+                 time.sleep(0.01)
+                 Global_QApplication.get_app().processEvents()
+                 self.control_panel.adjust_window_layout()
+                 self._layout_adjusted = True
+
+    def update_optimization_quality_history(self):
+        if not self.optimization_quality_history:
+            check_epoch = 5
+        else:
+            last_check_epoch = self.optimization_quality_history[-1][0]
+            check_epoch = math.ceil(last_check_epoch * 1.05)
+        
+        while check_epoch <= self.epoch:
+             # Only calculate if not already in history
+             try:
+                 is_good = self.is_good_optimization_epochs(check_epoch)
+                 self.optimization_quality_history.append((check_epoch, is_good))
+             except ValueError:
+                 break
+             check_epoch = math.ceil(check_epoch * 1.05)
+
+    def save_best_model_state(self, best_type_name, active_windows):
+        best_states_root = self.save_path_stem + "_Best_States"
+        target_dir = os.path.join(best_states_root, best_type_name)
+        os.makedirs(target_dir, exist_ok=True)
+
+        with open(os.path.join(target_dir, "0_output.txt"), "w", encoding="utf-8") as f:
+            f.write(self.info_text)
+
+        for window in active_windows:
+            base_name = "Unknown_Plot"
+            if window == self.linear_fit_window:
+                base_name = "Linear_Fit"
+            elif window == self.loss_over_epoch_window:
+                base_name = "Loss_Over_Epoch"
+            elif hasattr(self, 'loss_terms_over_epoch_window') and window == self.loss_terms_over_epoch_window:
+                base_name = "Loss_Terms_Over_Epoch"
+            elif hasattr(self, 'loss_weights_over_epoch_window') and window == self.loss_weights_over_epoch_window:
+                base_name = "Loss_Weights_Over_Epoch"
+            elif hasattr(self, 'loss_raw_over_epoch_window') and window == self.loss_raw_over_epoch_window:
+                base_name = "Loss_Raw_Over_Epoch"
+            elif window in self.evaluation_over_epoch_windows:
+                idx = self.evaluation_over_epoch_windows.index(window)
+                base_name = f"Eval_{self.non_opt_evaluation_function_names[idx]}"
+            elif window in self.plot_cases_windows:
+                idx = self.plot_cases_windows.index(window)
+                base_name = f"Case_{idx + 1}"
+                if idx < len(self.plot_cases_names):
+                    base_name += f"_{self.plot_cases_names[idx]}"
+
+            base_name = "".join([c for c in base_name if c.isalpha() or c.isdigit() or c == '_' or c == '-']).strip()
+
+            window.save_png(os.path.join(target_dir, f"{base_name}.png"), dpi=300, bbox_inches=None)
+            # window.save_plot_history(os.path.join(target_dir, f"{base_name}.csv"))
+
+        save_object = {'epoch': self.epoch,
+                       'model_state_dict': self.model.state_dict(),
+                       'optimizer_state_dict': self.optimizer.state_dict(),
+                       'training_losses': self.training_losses,
+                       'test_losses': self.test_losses}
+        torch.save(save_object, os.path.join(target_dir, "Best_Model.pth"))
+
+    @property
+    def info_text(self):
+        if not self.info_dicts:
+            return ""
+        
+        info_dict = self.info_dicts[-1]
+        parts = []
+        
+        # 1. Epoch
+        if 'Epoch' in info_dict:
+            val = info_dict['Epoch']
+            if 'Max_Epoch' in info_dict:
+                val += f"/{info_dict['Max_Epoch']}"
+            parts.append(f"Epoch  {val}")
+        
+        skip_keys = ['Epoch', 'Max_Epoch', 'Time', 'Speed', 'Elapsed_Time', 'Training_Speed']
+        
+        # First finding all base keys
+        base_keys = []
+        if 'Loss_Train' in info_dict: base_keys.append('Loss')
+        if 'LR' in info_dict: base_keys.append('LR')
+
+        for k in info_dict.keys():
+            if k in skip_keys or k == 'Loss_Train' or k == 'Loss_Test' or k == 'LR': continue
+            if k.endswith('_Train'):
+                base_key = k[:-6]
+                if base_key not in base_keys:
+                    base_keys.append(base_key)
+            elif k.endswith('_Test'):
+                pass # Handled by Train
+            else:
+                # Single value keys
+                 if k not in base_keys:
+                    base_keys.append(k)
+
+        for base_key in base_keys:
+            if base_key == 'LR':
+                parts.append(f"LR {info_dict['LR']}")
+                continue
+                
+            val_str = ""
+            if f"{base_key}_Train" in info_dict and f"{base_key}_Test" in info_dict:
+                 val_str = f"{info_dict[f'{base_key}_Train']}/{info_dict[f'{base_key}_Test']}"
+            elif f"{base_key}_Train" in info_dict:
+                 val_str = f"{info_dict[f'{base_key}_Train']}"
+            elif f"{base_key}_Test" in info_dict:
+                 val_str = f"{info_dict[f'{base_key}_Test']}"
+            elif base_key in info_dict:
+                 val_str = str(info_dict[base_key])
+            
+            if val_str:
+                parts.append(f"{base_key} {val_str}")
+            
+        # 3. Time, Speed
+        if 'Time' in info_dict:
+            parts.append(f"Time: {info_dict['Time']}")
+        if 'Speed' in info_dict:
+            parts.append(f"{info_dict['Speed']}")
+            
+        lines = []
+        prefix = "[按C停] "
+        indent = " " * 8 
+        max_width = 100
+        
+        current_line = prefix
+        first_in_line = True
+        
+        for part in parts:
+            sep = " | "
+            if first_in_line:
+                sep = ""
+                
+            added_len = len(sep) + len(part)
+            if len(current_line) + added_len > max_width:
+                lines.append(current_line)
+                current_line = indent + part
+                first_in_line = False 
+            else:
+                if not first_in_line or current_line != prefix:
+                    current_line += sep
+                current_line += part
+                first_in_line = False
+                
+        lines.append(current_line)
+        return "\n".join(lines)
+
     def evaluate(self):
         self.model.eval()
         with torch.no_grad():
@@ -1058,6 +1583,11 @@ class Train_NN_Network:
 
             test_loss = self.evaluate_loss(Ys_predict_test, self.Ys_test, self.Tags_test)
             self.test_losses.append(test_loss)
+            
+            if self.use_y_range_cap:
+                self.test_cap_loss_history.append(cap_output_range_loss(Ys_predict_test,
+                                                                        min=self.y_cap_min, 
+                                                                        max=self.y_cap_max).item())
 
             if self.weighted_multiple_loss_mode:
                 self.test_loss_terms_history.append(self.automatic_weighted_loss_model.loss_terms)
@@ -1078,13 +1608,34 @@ class Train_NN_Network:
                 self.test_evaluations_history[i].append(val)
                 current_test_evals.append(val)
 
-            info_text = f"Epoch {str(self.epoch).rjust(len(str(self.max_epoch)))}/{self.max_epoch} | "
-            info_text += f"Loss{smart_format_float(self.training_losses[-1], 4):>7}/{smart_format_float(test_loss, 4):<7}"
+            new_best_found_category = []
 
+            if test_loss < self.best_test_loss:
+                self.best_test_loss = test_loss
+                self.best_test_loss_epoch = self.epoch
+                new_best_found_category.append("Best_Test_Loss_Total")
+
+            if self.weighted_multiple_loss_mode:
+                current_raw_losses = self.test_loss_terms_history[-1]
+                for i, val in enumerate(current_raw_losses):
+                    if val < self.best_test_loss_terms[i]:
+                        self.best_test_loss_terms[i] = val
+                        self.best_test_loss_terms_epochs[i] = self.epoch
+                        new_best_found_category.append(f"Best_Test_Loss_{i + 1}")
+
+            # Populate self.info_dicts
+            current_info_dict = {}
+            current_info_dict['Epoch'] = str(self.epoch).rjust(len(str(self.max_epoch)))
+            current_info_dict['Max_Epoch'] = str(self.max_epoch)
+            
+            current_info_dict['Loss_Train'] = smart_format_float(self.training_losses[-1], 4)
+            current_info_dict['Loss_Test'] = smart_format_float(test_loss, 4)
+            
             for name, train_val, test_val in zip(self.non_opt_evaluation_function_names,
                                                  [h[-1] for h in self.training_evaluations_history],
                                                  current_test_evals):
-                info_text += f"| {name} {smart_format_float(train_val, 4):>7}/{smart_format_float(test_val, 4):<7}"
+                current_info_dict[f"{name}_Train"] = smart_format_float(train_val, 4)
+                current_info_dict[f"{name}_Test"] = smart_format_float(test_val, 4)
 
             if self.weighted_multiple_loss_mode:
                 for i in range(len(self.loss_functions)):
@@ -1093,180 +1644,61 @@ class Train_NN_Network:
                     train_weight = self.training_weights_history[-1][i]
                     test_weight = self.test_weights_history[-1][i]
                     
-                    info_text += f"| T{i+1} {smart_format_float(train_term, 4)}/{smart_format_float(test_term, 4)}"
-                    info_text += f" W{i+1} {smart_format_float(train_weight, 4)}/{smart_format_float(test_weight, 4)}"
+                    current_info_dict[f'T{i+1}_Train'] = smart_format_float(train_term, 4)
+                    current_info_dict[f'T{i+1}_Test'] = smart_format_float(test_term, 4)
+                    current_info_dict[f'W{i+1}_Train'] = smart_format_float(train_weight, 4)
+                    current_info_dict[f'W{i+1}_Test'] = smart_format_float(test_weight, 4)
 
-            if len(info_text) > 60:
-                indices = [i for i, c in enumerate(info_text) if c == '|']
-                if indices:
-                    split_idx = min(indices, key=lambda x: abs(x - len(info_text)//2))
-                    info_text = info_text[:split_idx] + "\n    " + info_text[split_idx+1:].lstrip()
+            # Learning Rate
+            current_lr = self.optimizer.param_groups[0]['lr']
+            if self.scheduler is not None:
+                current_info_dict['LR'] = smart_format_float(current_lr, 4)
 
             filename_text = f"{self.epoch:0>5.0f}_{smart_format_float(self.training_losses[-1], 4)}_{smart_format_float(test_loss, 4)}"
 
+            # Calculate time and speed for logging
+            elapsed_time_val = time.time() - self.training_start_time
+            print_elapsed_time = print_time_difference(elapsed_time_val, width=0)
+
+            print_training_speed_epochs = 10 ** (int(math.log10(self.epoch / 10)))
+            print_training_speed_epochs = max(print_training_speed_epochs, 1)
+            speed_val = (time.time() - self.training_start_time) / self.epoch * print_training_speed_epochs
+            print_training_speed = f"{print_time_difference(speed_val, width=0)}/{print_training_speed_epochs} Epoch{'s' if print_training_speed_epochs > 1 else ''}"
+
+            current_info_dict['Time'] = print_elapsed_time
+            current_info_dict['Speed'] = print_training_speed
+            
+            self.info_dicts.append(current_info_dict)
+
+            # CSV Logging
+            try:
+                import csv
+                has_header = os.path.isfile(self.csv_output_file) and os.path.getsize(self.csv_output_file) > 0
+                fieldnames = list(current_info_dict.keys())
+                with open(self.csv_output_file, 'a', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    if not has_header:
+                        writer.writeheader()
+                    
+                    writer.writerow(current_info_dict)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception as e:
+                print(f"Error writing to CSV log: {e}")
+                traceback.print_exc()
+
             ############ Printing ############
             if self.should_print_this_epoch():
-                print_elapsed_time = print_time_difference(time.time() - self.training_start_time, width=0)
-                print_training_speed_epochs = 10 ** (int(math.log10(self.epoch / 10)))
-                print_training_speed_epochs = max(print_training_speed_epochs, 1)
-                print_training_speed = (time.time() - self.training_start_time) / self.epoch * print_training_speed_epochs
-                print_training_speed = f"{print_time_difference(print_training_speed, width=0)}/{print_training_speed_epochs} Epoch{'s' if print_training_speed_epochs > 1 else ''}"
-
-                print(f'[按C停训] {info_text} | Time: {print_elapsed_time} | {print_training_speed}')
+                print(self.info_text)
+            
+            if self.automatic_extension:
+                self.update_optimization_quality_history()
 
             ############ Plotting ############
-            active_windows: List[Plot] = []
-            if self.should_plot_this_epoch():
-                if self.plot_current_linear_fit:
-                    self.linear_fit_window.set_window_title(f"Current Linear Fit @ Epoch {self.epoch}")
-                    self.linear_fit_window.set_figure_title(info_text)
-
-                    Ys_predict_train = self.model(self.Xs_train).clone().detach()
-                    Ys_predict_test = Ys_predict_test.clone().detach()
-                    Ys_test = self.Ys_test.clone().detach()
-                    Ys_train = self.Ys_train.clone().detach()
-
-                    plottable = False
-                    if callable(self.function_for_numerical_evaluation):
-                        test_curve_vertical = self.function_for_numerical_evaluation(Ys_predict_test)
-                        test_curve_horizontal = self.function_for_numerical_evaluation(Ys_test)
-                        train_curve_vertical = self.function_for_numerical_evaluation(Ys_predict_train)
-                        train_curve_horizontal = self.function_for_numerical_evaluation(Ys_train)
-                        plottable = True
-
-                    elif Ys_predict_test.ndim == 2 and Ys_predict_test.shape[1] == 1:
-                        test_curve_vertical = Ys_predict_test.squeeze(1)
-                        test_curve_horizontal = Ys_test.squeeze(1)
-                        train_curve_vertical = Ys_predict_train.squeeze(1)
-                        train_curve_horizontal = Ys_train.squeeze(1)
-                        plottable = True
-
-                    if plottable:
-                        linear_range_min = min(min(test_curve_horizontal), min(test_curve_vertical), min(train_curve_horizontal), min(train_curve_vertical))
-                        linear_range_max = max(max(test_curve_horizontal), max(test_curve_vertical), max(train_curve_horizontal), max(train_curve_vertical))
-                        linear_range_min -= (linear_range_max - linear_range_min) * 0.1
-                        linear_range_max += (linear_range_max - linear_range_min) * 0.1
-
-                        curves = [Curve(train_curve_horizontal, train_curve_vertical, plot_dot=True, dot_color=blue_color, Y_label="Training results")]
-                        curves.append(Curve(test_curve_horizontal, test_curve_vertical, plot_dot=True, dot_color=red_color, Y_label="Test results"))
-                        curves.append(Curve([linear_range_min, linear_range_max], [linear_range_min, linear_range_max], curve_color="#BBBBBB"))
-                        self.linear_fit_window.Curve_objects = curves
-                        active_windows.append(self.linear_fit_window)
-                        if self.save_pngs and self.should_save_this_epoch():
-                            self.linear_fit_window.save_png(self.save_path_stem + f"_Linear_Fit.{filename_text}.png", dpi=300, bbox_inches=None)
-
-                if self.plot_loss_over_epoch:
-                    self.loss_over_epoch_window.set_figure_title(info_text)
-                    self.loss_over_epoch_window.set_window_title(f"Loss over Epoch @ Epoch {self.epoch}")
-                    curve_X = list(range(self.epoch))
-                    self.loss_over_epoch_window.Curve_objects = \
-                        [Curve(curve_X, self.training_losses, curve_color=blue_color, Y_label="training loss"),
-                         Curve(curve_X, self.test_losses, curve_color=red_color, Y_label="test loss")]
-                    if self.save_pngs and self.should_save_this_epoch():
-                        self.loss_over_epoch_window.save_png(self.save_path_stem + f"_0Losses.png", dpi=300, bbox_inches=None)
-                    active_windows.append(self.loss_over_epoch_window)
-
-                if self.weighted_multiple_loss_mode:
-                    self.loss_terms_over_epoch_window.set_figure_title(info_text)
-                    self.loss_terms_over_epoch_window.set_window_title(f"Loss Terms over Epoch @ Epoch {self.epoch}")
-                    
-                    curve_X = list(range(self.epoch))
-                    curves = []
-                    for i in range(len(self.loss_functions)):
-                        train_losses_weighted = [epoch_data[i]*weight[i] for epoch_data,weight in zip(self.training_loss_terms_history,self.training_weights_history)]
-                        test_losses_weighted = [epoch_data[i]*weight[i] for epoch_data,weight in zip(self.test_loss_terms_history,self.test_weights_history)]
-                        color = matplotlib_colors[i + 2]
-                        curves.append(Curve(curve_X, train_losses_weighted, curve_color=color, curve_format=dashed_line, Y_label=f"Weighted Loss {i+1} Train"))
-                        curves.append(Curve(curve_X, test_losses_weighted, curve_color=color, curve_format=solid_line, Y_label=f"Weighted Loss {i+1} Test"))
-                    
-                    self.loss_terms_over_epoch_window.Curve_objects = curves
-                    active_windows.append(self.loss_terms_over_epoch_window)
-                    if self.save_pngs and self.should_save_this_epoch():
-                        self.loss_terms_over_epoch_window.save_png(self.save_path_stem + f"_0LossTerms.png", dpi=300, bbox_inches=None)
-
-                    self.loss_weights_over_epoch_window.set_figure_title(info_text)
-                    self.loss_weights_over_epoch_window.set_window_title(f"Weights over Epoch @ Epoch {self.epoch}")
-                    
-                    curve_X = list(range(self.epoch))
-                    curves = []
-                    for i in range(len(self.loss_functions)):
-                        train_losses_weighted = [epoch_data[i] for epoch_data in self.training_weights_history]
-                        test_losses_weighted = [epoch_data[i] for epoch_data in self.test_weights_history]
-                        color = matplotlib_colors[i + 2]
-                        curves.append(Curve(curve_X, train_losses_weighted, curve_color=color, curve_format="--", Y_label=f"Weight {i+1}"))
-                        # curves.append(Curve(curve_X, test_y, curve_color=color, curve_format="-", Y_label=f"Weight {i+1} Test"))
-                    
-                    self.loss_weights_over_epoch_window.Curve_objects = curves
-                    self.loss_weights_over_epoch_window.y_lim = (0, None)
-                    active_windows.append(self.loss_weights_over_epoch_window)
-                    if self.save_pngs and self.should_save_this_epoch():
-                        self.loss_weights_over_epoch_window.save_png(self.save_path_stem + f"_0Weights.png", dpi=300, bbox_inches=None)
-
-                    self.loss_raw_over_epoch_window.set_figure_title(info_text)
-                    self.loss_raw_over_epoch_window.set_window_title(f"Raw Losses over Epoch @ Epoch {self.epoch}")
-                    
-                    curve_X = list(range(self.epoch))
-                    curves = []
-                    for i in range(len(self.loss_functions)):
-                        train_losses_raw = [epoch_data[i] for epoch_data in self.training_loss_terms_history]
-                        test_losses_raw = [epoch_data[i] for epoch_data in self.test_loss_terms_history]
-                        color = matplotlib_colors[i + 2]
-                        curves.append(Curve(curve_X, train_losses_raw, curve_color=color, curve_format=dashed_line, Y_label=f"Raw Loss {i+1} Train"))
-                        curves.append(Curve(curve_X, test_losses_raw, curve_color=color, curve_format=solid_line, Y_label=f"Raw Loss {i+1} Test"))
-                    
-                    self.loss_raw_over_epoch_window.Curve_objects = curves
-                    active_windows.append(self.loss_raw_over_epoch_window)
-                    if self.save_pngs and self.should_save_this_epoch():
-                        self.loss_raw_over_epoch_window.save_png(self.save_path_stem + f"_0RawLosses.png", dpi=300, bbox_inches=None)
-
-                # New Evaluation Windows
-                curve_X = list(range(self.epoch))
-                for i, window in enumerate(self.evaluation_over_epoch_windows):
-                    window.set_figure_title(info_text)
-                    window.set_window_title(f"{self.non_opt_evaluation_function_names[i]} over Epoch @ Epoch {self.epoch}")
-                    window.Curve_objects = [
-                        Curve(curve_X, self.training_evaluations_history[i], curve_color=blue_color, Y_label="training"),
-                        Curve(curve_X, self.test_evaluations_history[i], curve_color=red_color, Y_label="test")
-                    ]
-                    if self.save_pngs and self.should_save_this_epoch():
-                        window.save_png(self.save_path_stem + f"_0Eval_{self.non_opt_evaluation_function_names[i]}.png", dpi=300, bbox_inches=None)
-                    active_windows.append(window)
-
-                if self.plot_cases:
-                    for window_count, (case_data, case_window, case_tag) in enumerate(zip(self.plot_cases, self.plot_cases_windows, self.plot_cases_tags)):
-                        case_window.set_window_title(f"Example Curve {window_count + 1} @ Epoch {self.epoch}")
-
-                        input_, output_known = case_data
-                        input_ = to_independent_torch_tensor(input_)
-                        output_known = to_independent_torch_tensor(output_known)
-                        if callable(self.function_for_plot_one_test):
-                            curve_X, curve_Y_known = self.function_for_plot_one_test(input_, output_known)
-                        else:
-                            curve_X, curve_Y_known = case_data
-                        output_predicted = self.run_model_for_one_input(case_data[0])
-                        if callable(self.function_for_plot_one_test):
-                            curve_X, curve_Y_predicted = self.function_for_plot_one_test(input_, output_predicted)
-                        else:
-                            curve_Y_predicted = output_predicted
-
-                        print(curve_X)
-                        print(curve_Y_known)
-                        print(curve_Y_predicted)
-
-                        case_window.Curve_objects = \
-                            [Curve(curve_X, curve_Y_known, curve_color=blue_color, Y_label="known curve"),
-                             Curve(curve_X, curve_Y_predicted, curve_color=red_color, Y_label="predicted curve"), ]
-                        active_windows.append(case_window)
-                    
-                        example_loss = self.evaluate_loss(output_predicted.unsqueeze(0), output_known.unsqueeze(0), case_tag.unsqueeze(0)).item()
-
-                        case_window.set_figure_title(
-                            info_text + f" | {self.plot_cases_names[window_count]} Case {window_count + 1} | Loss {smart_format_float(example_loss, 4)}")
-                        if self.save_pngs and self.should_save_this_epoch():
-                            case_window.save_png(self.save_path_stem + f"_Example.{filename_text}.png", dpi=300, bbox_inches=None)
-
-            for window_count, window in enumerate(active_windows):
-                window.shift_window = WINDOW_POSITIONS[len(active_windows)][window_count]
+            if self.should_plot_this_epoch() or len(new_best_found_category) > 0:
+                self.update_plots(Ys_predict_test,
+                                  filename_text,
+                                  new_best_found_category)
 
             if self.should_save_this_epoch():
                 save_object = {'epoch': self.epoch,
@@ -1282,7 +1714,10 @@ class Train_NN_Network:
         return test_loss
 
     def evaluate_loss(self,Ys_pred, Ys_known, Tags=None):
-        assert Ys_pred.shape == Ys_known.shape, "Ys_pred and Ys_known must have the same shape."
+        # 一般来说，Ys_pred和Ys_known的shape应该是一样的
+        # 但是比如紫外光谱的offset recovery, predict 输出的是offset的位置和大小，known是光谱，从位置/大小到光谱是在loss function里转换的，就应该inhibit
+        if not self.inhibit_output_shape_check:
+            assert Ys_pred.shape == Ys_known.shape, "Ys_pred and Ys_known must have the same shape."
         if self.weighted_multiple_loss_mode:
             losses = []
             for func in self.loss_functions:
@@ -1295,10 +1730,13 @@ class Train_NN_Network:
                 
             loss = self.automatic_weighted_loss_model(*losses)
         else:
-            if func_param_count(self.loss_function)==3:
-                loss = self.loss_function(Ys_pred, Ys_known, Tags)
+            if func_param_count(self.loss_functions[0])==3:
+                loss = self.loss_functions[0](Ys_pred, Ys_known, Tags)
             else:
-                loss = self.loss_function(Ys_pred, Ys_known)
+                loss = self.loss_functions[0](Ys_pred, Ys_known)
+        
+        if self.use_y_range_cap:
+             loss = loss + cap_output_range_loss(Ys_pred, min = self.y_cap_min, max = self.y_cap_max)
 
         return loss
 
@@ -1343,6 +1781,229 @@ class Train_NN_Network:
             self.last_plot_epoch = self.epoch
             return True
         return False
+
+    def update_plots(self,
+                     Ys_predict_test,
+                     filename_text,
+                     new_best_found_category):
+        
+        # Update Control Panel
+        self.update_info_window()
+
+        active_windows: List[Plot] = []
+
+        if self.plot_current_linear_fit:
+            self.linear_fit_window.set_window_title(f"Current Linear Fit @ Epoch {self.epoch}")
+            self.linear_fit_window.set_figure_title("")
+
+            Ys_predict_train = self.model(self.Xs_train).clone().detach()
+            Ys_predict_test = Ys_predict_test.clone().detach()
+            Ys_test = self.Ys_test.clone().detach()
+            Ys_train = self.Ys_train.clone().detach()
+
+            plottable = False
+            if callable(self.function_for_numerical_evaluation):
+                test_curve_vertical = self.function_for_numerical_evaluation(Ys_predict_test)
+                test_curve_horizontal = self.function_for_numerical_evaluation(Ys_test)
+                train_curve_vertical = self.function_for_numerical_evaluation(Ys_predict_train)
+                train_curve_horizontal = self.function_for_numerical_evaluation(Ys_train)
+                plottable = True
+
+            elif Ys_predict_test.ndim == 2 and Ys_predict_test.shape[1] == 1:
+                test_curve_vertical = Ys_predict_test.squeeze(1)
+                test_curve_horizontal = Ys_test.squeeze(1)
+                train_curve_vertical = Ys_predict_train.squeeze(1)
+                train_curve_horizontal = Ys_train.squeeze(1)
+                plottable = True
+
+            if plottable:
+                linear_range_min = min(min(test_curve_horizontal), min(test_curve_vertical), min(train_curve_horizontal), min(train_curve_vertical))
+                linear_range_max = max(max(test_curve_horizontal), max(test_curve_vertical), max(train_curve_horizontal), max(train_curve_vertical))
+                
+                # Use variable assignment instead of inplace operator -= or += to avoid modifying the original tensor values
+                # since min() or max() on tensors might return a view/reference to the element in the tensor
+                axis_padding = (linear_range_max - linear_range_min) * 0.1
+                linear_range_min = linear_range_min - axis_padding
+                linear_range_max = linear_range_max + axis_padding
+
+                curves = [Curve(train_curve_horizontal, train_curve_vertical, plot_dot=True, dot_color=blue_color, Y_label="Training results")]
+                curves.append(Curve(test_curve_horizontal, test_curve_vertical, plot_dot=True, dot_color=red_color, Y_label="Test results"))
+                curves.append(Curve([linear_range_min, linear_range_max], [linear_range_min, linear_range_max], curve_color="#BBBBBB"))
+                self.linear_fit_window.Curve_objects = curves
+                active_windows.append(self.linear_fit_window)
+                if self.save_pngs and self.should_save_this_epoch():
+                    self.linear_fit_window.save_png(self.save_path_stem + f"_Linear_Fit.{filename_text}.png", dpi=300, bbox_inches=None)
+
+        if self.plot_loss_over_epoch:
+            self.loss_over_epoch_window.set_figure_title("")
+            self.loss_over_epoch_window.set_window_title(f"Loss over Epoch @ Epoch {self.epoch}")
+            curve_X = list(range(1, self.epoch + 1))
+            self.loss_over_epoch_window.Curve_objects = \
+                [Curve(curve_X, self.training_losses, curve_color=blue_color, Y_label="training loss"),
+                    Curve(curve_X, self.test_losses, curve_color=red_color, Y_label="test loss")]
+            self.loss_over_epoch_window.y_lim = (0,None)
+            self.loss_over_epoch_window.percentage_zoom_Y(upper_limit_only=True)
+            if self.save_pngs and self.should_save_this_epoch():
+                self.loss_over_epoch_window.save_png(self.save_path_stem + f"_0Losses.png", dpi=300, bbox_inches=None)
+            active_windows.append(self.loss_over_epoch_window)
+
+        # Opt Status Window
+        curves = []
+        LR_scale_factor = max(self.test_losses)/max(self.lr_history)*0.6
+        # 1. LR
+        if self.scheduler is not None and len(self.lr_history) > 0:
+                curves.append(Curve(list(range(1, len(self.lr_history)+1)), 
+                                    [x * LR_scale_factor for x in  self.lr_history], 
+                                    curve_color=blue_color, Y_label="LR"))
+
+        curves.append(Curve(list(range(1, self.epoch+1)), self.test_losses, curve_color=black_color, Y_label="Test Loss"))
+        
+        # 2. Dots
+        if self.automatic_extension and self.optimization_quality_history:
+            good_epochs = [e for e, good in self.optimization_quality_history if good]
+            bad_epochs = [e for e, good in self.optimization_quality_history if not good]
+            
+            good_vals = [self.test_losses[e-1] for e in good_epochs if e-1 < len(self.test_losses)]
+            bad_vals = [self.test_losses[e-1] for e in bad_epochs if e-1 < len(self.test_losses)]
+            
+            if good_epochs:
+                curves.append(Curve(good_epochs, good_vals, plot_curve=False, plot_dot=True, dot_color=green_color, dot_format='.', dot_width=4, Y_label="Good Epoch"))
+            if bad_epochs:
+                curves.append(Curve(bad_epochs, bad_vals, plot_curve=False, plot_dot=True, dot_color=red_color, dot_format='.', dot_width=4, Y_label="Bad Epoch"))
+        
+        self.optimization_status_window.set_figure_title("")
+        self.optimization_status_window.y_axis_label = "Scaled Test Loss / LR"
+        self.optimization_status_window.set_window_title(f"Opt Status @ Epoch {self.epoch}")
+        self.optimization_status_window.Curve_objects = curves
+        self.optimization_status_window.y_lim = (0,None)
+        active_windows.append(self.optimization_status_window)
+        if self.save_pngs and self.should_save_this_epoch():
+                self.optimization_status_window.save_png(self.save_path_stem + f"_0OptStatus.png", dpi=300, bbox_inches=None)
+
+        if self.weighted_multiple_loss_mode:
+            self.loss_terms_over_epoch_window.set_figure_title("")
+            self.loss_terms_over_epoch_window.set_window_title(f"Loss Terms over Epoch @ Epoch {self.epoch}")
+            
+            curve_X = list(range(1, self.epoch + 1))
+            curves = []
+            for i in range(len(self.loss_functions)):
+                train_losses_weighted = [epoch_data[i]*weight[i] for epoch_data,weight in zip(self.training_loss_terms_history,self.training_weights_history)]
+                test_losses_weighted = [epoch_data[i]*weight[i] for epoch_data,weight in zip(self.test_loss_terms_history,self.test_weights_history)]
+                color = matplotlib_colors[i + 2]
+                curves.append(Curve(curve_X, train_losses_weighted, curve_color=color, curve_format=dashed_line, Y_label=f"Weighted Loss {i+1} Train"))
+                curves.append(Curve(curve_X, test_losses_weighted, curve_color=color, curve_format=solid_line, Y_label=f"Weighted Loss {i+1} Test"))
+            
+            if self.use_y_range_cap:
+                curves.append(Curve(curve_X, self.training_cap_loss_history, curve_color="#000000", curve_format=dashed_line, Y_label="Cap Loss Train"))
+                curves.append(Curve(curve_X, self.test_cap_loss_history, curve_color="#000000", curve_format=solid_line, Y_label="Cap Loss Test"))
+
+            self.loss_terms_over_epoch_window.Curve_objects = curves
+            self.loss_terms_over_epoch_window.y_lim = (0,None)
+            self.loss_terms_over_epoch_window.percentage_zoom_Y(upper_limit_only=True)
+            active_windows.append(self.loss_terms_over_epoch_window)
+            if self.save_pngs and self.should_save_this_epoch():
+                self.loss_terms_over_epoch_window.save_png(self.save_path_stem + f"_0LossTerms.png", dpi=300, bbox_inches=None)
+            
+            self.loss_weights_over_epoch_window.set_figure_title("")
+            self.loss_weights_over_epoch_window.set_window_title(f"Weights over Epoch @ Epoch {self.epoch}")
+            
+            curve_X = list(range(1, self.epoch + 1))
+            curves = []
+            for i in range(len(self.loss_functions)):
+                train_losses_weighted = [epoch_data[i] for epoch_data in self.training_weights_history]
+                # test_losses_weighted = [epoch_data[i] for epoch_data in self.test_weights_history]
+                color = matplotlib_colors[i + 2]
+                curves.append(Curve(curve_X, train_losses_weighted, curve_color=color, curve_format="--", Y_label=f"Weight {i+1}"))
+                # curves.append(Curve(curve_X, test_y, curve_color=color, curve_format="-", Y_label=f"Weight {i+1} Test"))
+            
+            self.loss_weights_over_epoch_window.Curve_objects = curves
+            self.loss_weights_over_epoch_window.y_lim = (0,None)
+            self.loss_weights_over_epoch_window.percentage_zoom_Y(upper_limit_only=True)
+            active_windows.append(self.loss_weights_over_epoch_window)
+            if self.save_pngs and self.should_save_this_epoch():
+                self.loss_weights_over_epoch_window.save_png(self.save_path_stem + f"_0Weights.png", dpi=300, bbox_inches=None)
+
+            self.loss_raw_over_epoch_window.set_figure_title("")
+            self.loss_raw_over_epoch_window.set_window_title(f"Raw Losses over Epoch @ Epoch {self.epoch}")
+            
+            curve_X = list(range(1, self.epoch + 1))
+            curves = []
+            for i in range(len(self.loss_functions)):
+                train_losses_raw = [epoch_data[i] for epoch_data in self.training_loss_terms_history]
+                test_losses_raw = [epoch_data[i] for epoch_data in self.test_loss_terms_history]
+                color = matplotlib_colors[i + 2]
+                curves.append(Curve(curve_X, train_losses_raw, curve_color=color, curve_format=dashed_line, Y_label=f"Raw Loss {i+1} Train"))
+                curves.append(Curve(curve_X, test_losses_raw, curve_color=color, curve_format=solid_line, Y_label=f"Raw Loss {i+1} Test"))
+            
+            if self.use_y_range_cap:
+                curves.append(Curve(curve_X, self.training_cap_loss_history, curve_color="#000000", curve_format=dashed_line, Y_label="Cap Loss Train"))
+                curves.append(Curve(curve_X, self.test_cap_loss_history, curve_color="#000000", curve_format=solid_line, Y_label="Cap Loss Test"))
+
+            self.loss_raw_over_epoch_window.Curve_objects = curves
+            self.loss_raw_over_epoch_window.y_lim = (0,None)
+            self.loss_raw_over_epoch_window.percentage_zoom_Y(upper_limit_only=True)
+            active_windows.append(self.loss_raw_over_epoch_window)
+            if self.save_pngs and self.should_save_this_epoch():
+                self.loss_raw_over_epoch_window.save_png(self.save_path_stem + f"_0RawLosses.png", dpi=300, bbox_inches=None)
+
+        # New Evaluation Windows
+        curve_X = list(range(1, self.epoch + 1))
+        for i, window in enumerate(self.evaluation_over_epoch_windows):
+            window.set_figure_title("")
+            window.set_window_title(f"{self.non_opt_evaluation_function_names[i]} over Epoch @ Epoch {self.epoch}")
+            window.Curve_objects = [
+                Curve(curve_X, self.training_evaluations_history[i], curve_color=blue_color, Y_label="training"),
+                Curve(curve_X, self.test_evaluations_history[i], curve_color=red_color, Y_label="test")
+            ]
+            window.y_lim = (min([0]+self.training_evaluations_history[i]+self.test_evaluations_history[i]),None)
+            window.percentage_zoom_Y(upper_limit_only=True)
+            if self.save_pngs and self.should_save_this_epoch():
+                window.save_png(self.save_path_stem + f"_0Eval_{self.non_opt_evaluation_function_names[i]}.png", dpi=300, bbox_inches=None)
+            active_windows.append(window)
+
+        if self.plot_cases:
+            for window_count, (case_data, case_window, case_tag) in enumerate(zip(self.plot_cases, self.plot_cases_windows, self.plot_cases_tags)):
+                case_window.set_window_title(f"Example Curve {window_count + 1} @ Epoch {self.epoch}")
+
+                input_, output_known = case_data
+                input_ = to_independent_torch_tensor(input_)
+                output_known = to_independent_torch_tensor(output_known)
+                if callable(self.function_for_plot_one_test):
+                    curve_X, curve_Y_known = self.function_for_plot_one_test(input_, output_known)
+                else:
+                    curve_X, curve_Y_known = case_data
+                output_predicted = self.run_model_for_one_input(case_data[0])
+                if callable(self.function_for_plot_one_test):
+                    curve_X, curve_Y_predicted = self.function_for_plot_one_test(input_, output_predicted)
+                else:
+                    curve_Y_predicted = output_predicted
+
+                print(curve_X)
+                print(curve_Y_known)
+                print(curve_Y_predicted)
+
+                case_window.Curve_objects = \
+                    [Curve(curve_X, curve_Y_known, curve_color=blue_color, Y_label="known curve"),
+                    Curve(curve_X, curve_Y_predicted, curve_color=red_color, Y_label="predicted curve"), ]
+                active_windows.append(case_window)
+            
+                example_loss = self.evaluate_loss(output_predicted.unsqueeze(0), output_known.unsqueeze(0), case_tag.unsqueeze(0)).item()
+
+                case_window.set_figure_title(
+                    f"{self.plot_cases_names[window_count]} Case {window_count + 1} | Loss {smart_format_float(example_loss, 4)}")
+                if self.save_pngs and self.should_save_this_epoch():
+                    case_window.save_png(self.save_path_stem + f"_Example.{filename_text}.png", dpi=300, bbox_inches=None)
+
+        for window_count, window in enumerate(active_windows):
+            window.shift_window = WINDOW_POSITIONS[len(active_windows)][window_count]
+
+        self.control_panel.adjust_window_layout()
+
+        if len(new_best_found_category) > 0:
+            for category in new_best_found_category:
+                pass
+                # TODO: Profile on this for optimization
+                # self.save_best_model_state(category, active_windows)
 
     def run_model_for_one_input(self, input_vector):
         if not isinstance(input_vector, torch.Tensor):
