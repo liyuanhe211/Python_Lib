@@ -25,9 +25,12 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as Navigation
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.figure import Figure
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, griddata, Rbf, bisplrep, bisplev, RectBivariateSpline
+from scipy.ndimage import gaussian_filter
 import matplotlib.font_manager as font_manager
 import operator
+import colorsys
+import matplotlib.colors as mcolors
 
 NON_ASCII_FONT_FILE = os.path.join(filename_parent(__file__), "SourceHanSansSC-Medium.otf")
 
@@ -80,7 +83,7 @@ matplotlib_dot_formats = [circle_mkr, square_mkr, diamond_mkr, triangle_down_mkr
 matplotlib_colors = [blue_color, red_color, green_color, purple_color, orange_color, cyan_color, yellow_color, pink_color, brown_color, grey_color]
 matplotlib_colors = matplotlib_colors * 10000
 
-WINDOW_POSITIONS = {1: ((0, 0)),
+WINDOW_POSITIONS = {1: ((0, 0),),
                     2: ((-0.5, 0), (0.5, 0)),
                     3: ((-1, 0), (0, 0), (1, 0)),
                     4: ((-1.5, 0), (-0.5, 0), (0.5, 0), (1.5, 0)),
@@ -492,10 +495,319 @@ class Curve:
         return self.manipulate_with(other, operator.pow)
 
 
+class Grid:
+    def __init__(self,
+                 XYZ_triples=None,
+                 Xs=None,
+                 Ys=None,
+                 do_interpolation=True,
+                 interpolation_type="linear",  # linear, cubic, nearest, multiquadric, inverse, gaussian, thin_plate
+                 must_pass_through_points=True,
+                 smoothing=0,
+                 interpolation_density=200,
+
+                 Z_axis_colors=None,  # list of (z, color)
+                 Z_linear_or_log="linear",  # linear or log
+
+                 show_contour=False,
+                 contour_levels=None,
+                 contour_values=None,
+                 show_contour_labels=False, # True, False or list of strings
+                 contour_style=dashed_line,
+                 contour_width=0.5,
+                 contour_color='k',
+
+                 contour_do_interpolation=None,
+                 contour_interpolation_type: Optional[Literal['gaussian_filter', 
+                                                              'b_spline', 
+                                                              'spline', 
+                                                              'multiquadric', 
+                                                              'inverse', 
+                                                              'gaussian', 
+                                                              'linear', 
+                                                              'cubic', 
+                                                              'quintic', 
+                                                              'thin_plate']]=None,
+                 contour_must_pass_through_points=None,
+                 contour_smoothing=None,
+
+                 normalize_to=None,
+                 scale_factor=None,
+                 
+                 grid_line_X=None, # True, False, list of strings or float (spacing)
+                 grid_line_Y=None, # True, False, list of strings or float (spacing)
+                 show_colorbar=False
+                 ):
+        """
+        Initialize a Grid object for plotting 3D data (heatmap/contour).
+
+        :param XYZ_triples: List of tuples (x, y, z) representing the data points.
+                            If provided, Xs, Ys, Zs will be extracted from this.
+        :param Xs: Optional. 1D array of X coordinates for the grid or input data X points if XYZ_triples is not used (not fully supported independently).
+                   If used with Ys to define a grid, they define the mesh.
+        :param Ys: Optional. 1D array of Y coordinates.
+        :param do_interpolation: Boolean. If True, interpolation is performed to generate a regular grid from scattered data.
+                                 If False, nearest neighbor interpolation is used to fill the grid (pixelated view).
+        :param interpolation_type: String. algorithm for interpolation.
+                                   Options for griddata (must_pass_through_points=True): 'linear', 'cubic', 'nearest'.
+                                   Options for Rbf (must_pass_through_points=False): 'multiquadric', 'inverse', 'gaussian', 'linear', 'cubic', 'quintic', 'thin_plate'.
+                                   Options for smoothing: 'gaussian_filter', 'b_spline'.
+        :param must_pass_through_points: Boolean. If True, uses scipy.interpolate.griddata (exact interpolation).
+                                         If False, uses scipy.interpolate.Rbf (Radial Basis Function, can smooth data).
+        :param smoothing: Float. Smoothing factor for Rbf or gaussian_filter interpolation.
+        :param interpolation_density: Int. Number of points along each axis for the generated grid (density * density points total).
+        :param color_map_data: List of (value, color) tuples to define a custom colormap.
+                               The colormap will interpolate between these colors based on the Z values.
+        :param color_map_scale: String. 'linear' or 'log'. Scale for the colormap.
+        :param show_contour: Boolean. Whether to draw contour lines on top of the heatmap.
+        :param contour_levels: Int or None. Number of contour levels to draw automatically.
+        :param contour_values: List of floats or None. Specific Z values at which to draw contour lines.
+        :param show_contour_values: Boolean or List. If True, shows numerical values on the contour lines.
+                                    If a list, must be same length as contour_values or contour_levels, specifying custom labels.
+        :param contour_style: String. Line style for contour lines (e.g., '-', '--').
+        :param contour_width: Float. Width of contour lines.
+        :param contour_color: Color for contour lines.
+        :param contour_do_interpolation: Boolean. If None, uses do_interpolation.
+        :param contour_interpolation_type: String. If None, uses interpolation_type.
+
+        'gaussian_filter'
+        'b_spline'
+        'spline'
+        'multiquadric'
+        'inverse'
+        'gaussian'
+        'linear'
+        'cubic'
+        'quintic'
+        'thin_plate'
+        'multiquadric'
+
+        :param contour_must_pass_through_points: Boolean. If None, uses must_pass_through_points.
+        :param contour_smoothing: Float. If None, uses smoothing.
+        :param normalize_to: Float or Tuple(min, max). Normalize Z values to this range (0, val) or (min, max).
+        :param scale_factor: Float. Multiply all Z values by this factor.
+        """
+
+        self.XYZs = XYZ_triples if XYZ_triples else []
+        self.Xs_input = Xs
+        self.Ys_input = Ys
+        self.do_interpolation = do_interpolation
+        self.interpolation_type = interpolation_type
+        self.must_pass_through_points = must_pass_through_points
+        self.smoothing = smoothing
+        self.grid_density = interpolation_density
+        self.Z_axis_colors = Z_axis_colors
+        self.Z_linear_or_log = Z_linear_or_log
+        self.show_contour = show_contour
+        self.contour_levels = contour_levels
+        self.contour_values = contour_values
+        self.show_contour_values = show_contour_labels
+        self.contour_style = contour_style
+        self.contour_width = contour_width
+        self.contour_color = contour_color
+        
+        self.contour_do_interpolation = contour_do_interpolation if contour_do_interpolation is not None else do_interpolation
+        self.contour_interpolation_type = contour_interpolation_type if contour_interpolation_type is not None else interpolation_type
+        self.contour_must_pass_through_points = contour_must_pass_through_points if contour_must_pass_through_points is not None else must_pass_through_points
+        self.contour_smoothing = contour_smoothing if contour_smoothing is not None else smoothing
+        
+        self.normalize_to = normalize_to
+        self.scale_factor = scale_factor
+        
+        self.grid_line_X = grid_line_X
+        self.grid_line_Y = grid_line_Y
+        self.show_colorbar = show_colorbar
+
+        self.Xs = None
+        self.Ys = None
+        self.Zs = None
+
+        if self.XYZs:
+            # Assuming list of tuples/lists
+            raw_data = np.array([list(pt) for pt in self.XYZs])
+            if raw_data.ndim == 2 and raw_data.shape[1] == 3:
+                self.Xs = raw_data[:, 0]
+                self.Ys = raw_data[:, 1]
+                self.Zs = raw_data[:, 2]
+
+                if self.normalize_to is not None:
+                    if isinstance(self.normalize_to, (int, float)):
+                        norm_min, norm_max = 0, self.normalize_to
+                    else:
+                        norm_min, norm_max = self.normalize_to
+
+                    z_min, z_max = np.min(self.Zs), np.max(self.Zs)
+                    if z_max != z_min:
+                        self.Zs = (self.Zs - z_min) / (z_max - z_min) * (norm_max - norm_min) + norm_min
+
+                if self.scale_factor is not None:
+                    self.Zs *= self.scale_factor
+
+    def _calculate_grid_z(self, grid_x, grid_y, do_interp, interp_type, must_pass, smoothing_val):
+        grid_z = None
+        if do_interp:
+            if interp_type == 'gaussian_filter':
+                try:
+                    grid_z_base = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method='linear')
+                    
+                    if np.isnan(grid_z_base).any():
+                         grid_z_nearest = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method='nearest')
+                         grid_z_base[np.isnan(grid_z_base)] = grid_z_nearest[np.isnan(grid_z_base)]
+
+                    grid_z = gaussian_filter(grid_z_base, sigma=smoothing_val)
+                except Exception as e:
+                    print(f"gaussian_filter failed: {e}")
+            
+            elif interp_type in ['b_spline', 'spline']:
+                 try:
+                      grid_z_base = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method='linear')
+
+                      if np.isnan(grid_z_base).any():
+                           grid_z_nearest = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method='nearest')
+                           grid_z_base[np.isnan(grid_z_base)] = grid_z_nearest[np.isnan(grid_z_base)]
+                      
+                      # RectBivariateSpline expects s as sum of squared errors. 
+                      # For a dense grid (e.g. 40000 points), s needs to be very large to have an effect.
+                      # We scale smoothing_val by the number of points so that smoothing_val acts like "Mean Squared Error Allowed".
+                      total_points = grid_z_base.size
+                      sv = smoothing_val if smoothing_val is not None else 0
+                      s_val = (sv * total_points) if sv > 0 else 0
+                      
+                      x_1d = grid_x[0, :]
+                      y_1d = grid_y[:, 0]
+                      
+                      # RectBivariateSpline expects Z shape (nx, ny) where x is first dim
+                      # grid_z_base is (ny, nx) from meshgrid
+                      rb_spline = RectBivariateSpline(x_1d, y_1d, grid_z_base.T, s=s_val)
+                      
+                      # Evaluate
+                      grid_z = rb_spline(x_1d, y_1d, grid=True).T
+
+                 except Exception as e:
+                      print(f"b_spline failed: {e}")
+            
+            elif must_pass:
+                # griddata
+                try:
+                    grid_z = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method=interp_type)
+                except Exception as e:
+                    print(f"griddata failed: {e}")
+            else:
+                # Rbf
+                func_type = interp_type if interp_type in ['multiquadric', 'inverse', 'gaussian', 'linear', 'cubic', 'quintic', 'thin_plate'] else 'multiquadric'
+                try:
+                    rbf = Rbf(self.Xs, self.Ys, self.Zs, function=func_type, smooth=smoothing_val)
+                    grid_z = rbf(grid_x, grid_y)
+                except Exception as e:
+                    print(f"Rbf failed: {e}, falling back to linear griddata")
+                    grid_z = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method='linear')
+        else:
+            # If not interpolation, use nearest neighbor to fill the pixels, creating a blocky effect
+            try:
+                grid_z = griddata((self.Xs, self.Ys), self.Zs, (grid_x, grid_y), method='nearest')
+            except Exception as e:
+                print(f"griddata (nearest) failed: {e}")
+        return grid_z
+
+    def get_grid_data(self):
+        if self.Xs is None:
+            return None, None, None, None
+
+        if self.Xs_input is not None and self.Ys_input is not None:
+             grid_x_1d = np.array(self.Xs_input)
+             grid_y_1d = np.array(self.Ys_input)
+        else:
+             x_min, x_max = np.min(self.Xs), np.max(self.Xs)
+             y_min, y_max = np.min(self.Ys), np.max(self.Ys)
+
+             grid_x_1d = np.linspace(x_min, x_max, self.grid_density)
+             grid_y_1d = np.linspace(y_min, y_max, self.grid_density)
+        
+        grid_x, grid_y = np.meshgrid(grid_x_1d, grid_y_1d)
+
+        grid_z_mesh = self._calculate_grid_z(grid_x, grid_y, self.do_interpolation, self.interpolation_type, self.must_pass_through_points, self.smoothing)
+        
+        if self.show_contour:
+             grid_z_contour = self._calculate_grid_z(grid_x, grid_y, self.contour_do_interpolation, self.contour_interpolation_type, self.contour_must_pass_through_points, self.contour_smoothing)
+        else:
+             grid_z_contour = None
+             
+        return grid_x, grid_y, grid_z_mesh, grid_z_contour
+
+    def get_colormap(self):
+        if not self.Z_axis_colors:
+            return None
+
+        z_color_pairs = list(self.Z_axis_colors)
+        z_color_pairs.sort(key=lambda x: x[0])
+
+        zs = [float(x[0]) for x in z_color_pairs]
+        colors_in = [x[1] for x in z_color_pairs]
+        
+        vmin = min(zs)
+        vmax = max(zs)
+
+        if self.Z_linear_or_log == 'log':
+            if any(z <= 0 for z in zs):
+                print("Warning: Log scale requested for colormap but z values non-positive. using linear.")
+            else:
+                zs = np.log10(zs)
+
+        min_z, max_z = min(zs), max(zs)
+        if max_z == min_z:
+            norm_zs = [0.0] * len(zs)
+        else:
+            norm_zs = [(z - min_z) / (max_z - min_z) for z in zs]
+
+        def to_rgb_arr(c):
+            if isinstance(c, str):
+                return mcolors.to_rgb(c)
+            else:
+                return c
+
+        rgbs_in = [to_rgb_arr(c) for c in colors_in]
+
+        N = 256
+        res_colors = []
+        vals = np.linspace(0, 1, N)
+
+        for v in vals:
+            idx = 0
+            for i in range(len(norm_zs) - 1):
+                if norm_zs[i] <= v <= norm_zs[i + 1]:
+                    idx = i
+                    break
+            else:
+                idx = len(norm_zs) - 2
+
+            if idx < 0: idx = 0
+
+            lower, upper = norm_zs[idx], norm_zs[idx + 1]
+            if upper == lower:
+                t = 0
+            else:
+                t = (v - lower) / (upper - lower)
+
+            r1, g1, b1 = rgbs_in[idx]
+            r2, g2, b2 = rgbs_in[idx + 1]
+
+            r = r1 + (r2 - r1) * t
+            g = g1 + (g2 - g1) * t
+            b = b1 + (b2 - b1) * t
+
+            res_colors.append((r, g, b))
+
+        return mcolors.ListedColormap(res_colors, name='custom_hsv'), vmin, vmax
+
+
 class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
     def __init__(
             self,
-            Curve_objects: Union[Curve, Sequence[Curve]] = None,
+
+            # You can leave both to be None to create an empty plot window, and update them later with update_plot
+            Curve_objects: Union[Curve, Sequence[Curve], None] = None,
+            Grid_objects: Union[Grid, Sequence[Grid], None] = None,
+            
             x_axis_label="X",
             y_axis_label="Y",
             fig_size=(4, 3),
@@ -560,7 +872,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.save_img_filepath = save_img_filepath
         self.save_img_dpi = save_img_dpi
         self.current_location = (0, 0)
-        self.comrades: List[QWidget] = []
+        self._additional_offset_px = (0, 0)
+        self.comrades: Sequence[QWidget] = []
         if isinstance(shift_window, (int, float)):
             shift_window = (shift_window, 0)
         if multiple_plot_arrangement is not None:
@@ -574,35 +887,76 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.setStyleSheet("background-color: white;")
 
         layout = QtWidgets.QVBoxLayout(self)
-        self._fig = Figure(figsize=self.fig_size, dpi=100, constrained_layout=True)
-        self._fig.set_constrained_layout_pads(w_pad=0.08, h_pad=0.08, hspace=0.08, wspace=0.08)
+        
+        # Calculate figure size to ensure the axes area matches self.fig_size
+        # Using user provided relative ratios: top 1, bottom 0.076, left 0.130, right 0.964
+        user_left = 0.130
+        user_right = 0.964
+        user_bottom = 0.076
+        user_top = 0.99
+
+        ax_width, ax_height = self.fig_size
+        
+        # Determine total figure dimensions such that the axis fraction equals the requested size
+        width_fraction = user_right - user_left
+        height_fraction = user_top - user_bottom
+        
+        if width_fraction <= 0 or height_fraction <= 0:
+             # Fallback if ratios are invalid
+             fig_width = ax_width + 1.0
+             fig_height = ax_height + 1.0
+             self._layout_params = {'left': 0.15, 'right': 0.95, 'top': 0.95, 'bottom': 0.15}
+        else:
+            fig_width = ax_width / width_fraction
+            fig_height = ax_height / height_fraction
+            
+            self._layout_params = {
+                'left': user_left,
+                'bottom': user_bottom,
+                'right': user_right,
+                'top': user_top
+            }
+
+        self._fig = Figure(figsize=(fig_width, fig_height), dpi=100, constrained_layout=False)
+        # self._fig.set_constrained_layout_pads(w_pad=0.08, h_pad=0.08, hspace=0.08, wspace=0.08)
         self._canvas = FigureCanvas(self._fig)
         self._ax = self._fig.add_subplot(111)
 
-        # Navigation toolbar plus a checkable push button in one horizontal layout
-        toolbar_layout = QtWidgets.QHBoxLayout()
+        # Navigation toolbar setup
         self._toolbar = NavigationToolbar(self._canvas, self)
         self._toolbar.setStyleSheet("background-color: #f0f0f0;")
-        toolbar_layout.addWidget(self._toolbar)
+        self._toolbar.setIconSize(QtCore.QSize(16, 16)) # Small icons
+        
+        # ALLOW TOOLBAR TO SHRINK: Ignore horizontal size hint and set min width to 0
+        self._toolbar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed)
+        self._toolbar.setMinimumWidth(0)
 
-        # Create the “Pause” button to the right of the toolbar
+        # Create the “Pause” button
         self.pause_button = QtWidgets.QPushButton("Pause", self)
         self.pause_button.setStyleSheet("background-color: #f0f0f0;")
         self.pause_button.setCheckable(True)
         pause_font = QtGui.QFont("Arial", 10)
         self.pause_button.setFont(pause_font)
-        # Match toolbar button height; set fixed width = 100
+        # Match toolbar button height
         toolbar_height = self._toolbar.sizeHint().height()
         self.pause_button.setFixedSize(60, toolbar_height)
 
-        # Create the “Bring to front” button to the right of the toolbar
+        # Create the “Bring to front” button
         self.raise_button = QtWidgets.QPushButton("Raise All", self)
         self.raise_button.setStyleSheet("background-color: #f0f0f0;")
         raise_font = QtGui.QFont("Arial", 10)
         self.raise_button.setFont(raise_font)
-        toolbar_height = self._toolbar.sizeHint().height()
         self.raise_button.setFixedSize(60, toolbar_height)
         connect_once(self.raise_button, self.bring_to_front)
+
+        # Container layout for toolbar + custom buttons
+        toolbar_container_layout = QtWidgets.QHBoxLayout()
+        toolbar_container_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_container_layout.setSpacing(0)
+        
+        toolbar_container_layout.addWidget(self._toolbar) # Toolbar is ignored policy, so it shrinks
+        toolbar_container_layout.addWidget(self.raise_button) # Fixed size
+        toolbar_container_layout.addWidget(self.pause_button) # Fixed size
 
         # Add horizontal layout for the resizable label with left spacer
         label_layout = QtWidgets.QHBoxLayout()
@@ -613,12 +967,9 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         label_layout.addWidget(self.resizable_label)
         label_layout.addSpacing(10)  # horizontal left spacer
         # label_layout.addStretch()  # optional: push label to the left if needed
-        toolbar_layout.addWidget(self.raise_button)
-        toolbar_layout.addWidget(self.pause_button)
-        toolbar_layout.setSpacing(0)
-        # Now add them as the first row
 
-        layout.addLayout(toolbar_layout)
+        # Now add the toolbar container as the first row
+        layout.addLayout(toolbar_container_layout)
         layout.addSpacing(10)
         layout.addLayout(label_layout)
         layout.addWidget(self._canvas)
@@ -632,13 +983,19 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             prop = font_manager.FontProperties(fname=NON_ASCII_FONT_FILE, weight='bold')
             plt.rcParams['font.family'] = prop.get_name()
 
-        self._Curve_objects = []
-        if isinstance(Curve_objects, Curve):
-            Curve_objects = [Curve_objects]
-        self.Curve_objects = Curve_objects if Curve_objects else []
+        self._plot_objects = []
+        
+        if Grid_objects is not None:
+            if isinstance(Grid_objects, (Grid, Curve)):
+                Grid_objects = [Grid_objects]
+            self.plot_objects = Grid_objects
+        else:
+            if isinstance(Curve_objects, (Grid, Curve)):
+                Curve_objects = [Curve_objects]
+            self.plot_objects = Curve_objects if Curve_objects else []
 
         self.setWindowTitle(window_title)
-        if self.Curve_objects:
+        if self.plot_objects:
             self.show()
             self.center_the_widget()
             self.move_window()
@@ -685,6 +1042,15 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self._shift_window = new_tuple
         self.move_window()
 
+    @property
+    def additional_offset_px(self):
+        return self._additional_offset_px
+
+    @additional_offset_px.setter
+    def additional_offset_px(self, offset):
+        self._additional_offset_px = offset
+        self.move_window()
+
     def move_window(self):
         app = Global_QApplication.get_app()
         screens = app.screens()
@@ -703,22 +1069,22 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         x_centered = screen_x + (screen_width - self.width()) // 2
         y_centered = screen_y + (screen_height - self.height()) // 2
 
-        new_x_position = x_centered + self.shift_window[0] * (self.width() + 3)
-        new_y_position = y_centered + self.shift_window[1] * (self.height() + 30)
+        new_x_position = x_centered + self.shift_window[0] * (self.width() + 3) + self.additional_offset_px[0]
+        new_y_position = y_centered + self.shift_window[1] * (self.height() + 30) + self.additional_offset_px[1]
         if (new_x_position, new_y_position) != self.current_location:
             self.move(round(new_x_position), round(new_y_position))
             self.current_location = (new_x_position, new_y_position)
 
     @property
-    def Curve_objects(self):
-        return self._Curve_objects
+    def plot_objects(self):
+        return self._plot_objects
 
-    @Curve_objects.setter
-    def Curve_objects(self, new_Curve_objects):
-        if isinstance(new_Curve_objects, Curve):
-            self._Curve_objects = [new_Curve_objects]
+    @plot_objects.setter
+    def plot_objects(self, new_objects):
+        if isinstance(new_objects, (Curve, Grid)):
+            self._plot_objects = [new_objects]
         else:
-            self._Curve_objects = list(new_Curve_objects)
+            self._plot_objects = list(new_objects)
         self._update_plot()
         self.move_window()
 
@@ -733,8 +1099,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
     def set_window_title(self, title):
         self.setWindowTitle(title)
 
-    def update_data(self, new_Curve_objects, pause=0):
-        self.Curve_objects = new_Curve_objects
+    def update_data(self, new_Curves_or_Grids, pause=0):
+        self.plot_objects = new_Curves_or_Grids
         self.pause(pause)
 
     def pause(self, seconds=0):
@@ -763,7 +1129,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         """
         # If pause button is checked, do not update the data portion
 
-        if not self._Curve_objects:
+        if not self._plot_objects:
             self.hide()
             return
         else:
@@ -777,26 +1143,111 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
         self._ax.clear()
 
+        # Check mode based on the first object
+        first_obj = self._plot_objects[0]
+        if isinstance(first_obj, Grid):
+            self._update_plot_grid()
+        else:
+            self._update_plot_curve()
+
+    def _update_plot_grid(self):
+        for curve in self._plot_objects:
+            if not isinstance(curve, Grid): continue
+
+            grid_x, grid_y, grid_z_mesh, grid_z_contour = curve.get_grid_data()
+            mesh_plot = None 
+            if grid_z_mesh is not None:
+                cmap_info = curve.get_colormap()
+                
+                if cmap_info is not None:
+                     cmap, vmin, vmax = cmap_info
+                     mesh_plot = self._ax.pcolormesh(grid_x, grid_y, grid_z_mesh, cmap=cmap, vmin=vmin, vmax=vmax, shading='auto', zorder=1)
+                else:
+                     mesh_plot = self._ax.pcolormesh(grid_x, grid_y, grid_z_mesh, shading='auto', zorder=1)
+                
+                if curve.show_colorbar and mesh_plot:
+                    self._fig.colorbar(mesh_plot, ax=self._ax)
+
+            if curve.show_contour and grid_z_contour is not None:
+                levels = curve.contour_values if curve.contour_values is not None else curve.contour_levels
+                contour_set = self._ax.contour(grid_x, grid_y, grid_z_contour, levels=levels,
+                                 colors=curve.contour_color, linewidths=curve.contour_width,
+                                 linestyles=curve.contour_style, zorder=3) # Higher zorder than grid
+                
+                if curve.show_contour_values:
+                    if isinstance(curve.show_contour_values, list):
+                        # Ensure we have specific levels to match against used_levels might vary if levels was int
+                        used_levels = contour_set.levels
+                        if len(curve.show_contour_values) != len(used_levels):
+                             print(f"Warning: show_contour_values length ({len(curve.show_contour_values)}) does not match contour levels ({len(used_levels)}).")
+                        
+                        fmt = {}
+                        # Create a dictionary mapping the actual level value to the string label
+                        for l, s in zip(used_levels, curve.show_contour_values):
+                             fmt[l] = s
+                        self._ax.clabel(contour_set, inline=True, fontsize=10, fmt=fmt)
+                    else:
+                        self._ax.clabel(contour_set, inline=True, fontsize=10)
+                        
+            # Grid lines logic
+            def process_grid_line(option, min_val, max_val):
+                lines = []
+                if option is True:
+                     return True, None
+                elif isinstance(option, (int, float)) and not isinstance(option, bool):
+                     # Spacing
+                     start = math.ceil(min_val / option) * option
+                     lines = np.arange(start, max_val + option * 0.001, option) 
+                elif isinstance(option, (list, tuple, np.ndarray)):
+                     lines = option
+                
+                return False, lines
+
+            if grid_x is not None and grid_y is not None:
+                x_min, x_max = np.min(grid_x), np.max(grid_x)
+                y_min, y_max = np.min(grid_y), np.max(grid_y)
+                
+                use_default_x_grid, x_lines = process_grid_line(curve.grid_line_X, x_min, x_max)
+                use_default_y_grid, y_lines = process_grid_line(curve.grid_line_Y, y_min, y_max)
+                
+                if use_default_x_grid:
+                     self._ax.xaxis.grid(True, linestyle=curve.contour_style, linewidth=0.5, color='gray', zorder=2) # zorder between mesh and contour
+                elif x_lines is not None and len(x_lines) > 0:
+                     self._ax.set_xticks(x_lines)
+                     self._ax.xaxis.grid(True, linestyle=curve.contour_style, linewidth=0.5, color='gray', zorder=2)
+                
+                if use_default_y_grid:
+                     self._ax.yaxis.grid(True, linestyle=curve.contour_style, linewidth=0.5, color='gray', zorder=2)
+                elif y_lines is not None and len(y_lines) > 0:
+                     self._ax.set_yticks(y_lines)
+                     self._ax.yaxis.grid(True, linestyle=curve.contour_style, linewidth=0.5, color='gray', zorder=2)
+
+        self._finalize_plot_settings()
+
+    def _update_plot_curve(self):
         # Automatic color logic
         if self.auto_color is None:
             # If no color is specified in any curve, auto_color = True
             any_colors = any((obj.curve_color or obj.curve_legend_color or obj.dot_color)
-                             for obj in self._Curve_objects)
+                             for obj in self._plot_objects)
             auto_color_active = not any_colors
         else:
             auto_color_active = self.auto_color
 
         if auto_color_active:
-            for i, obj in enumerate(self._Curve_objects):
-                color = matplotlib_colors[i]
-                obj.curve_color = color
-                obj.curve_legend_color = color
-                obj.dot_color = color
+            for i, obj in enumerate(self._plot_objects):
+                if isinstance(obj, Curve):
+                    color = matplotlib_colors[i]
+                    obj.curve_color = color
+                    obj.curve_legend_color = color
+                    obj.dot_color = color
 
         legend_handles = []
 
         # Plot each Curve
-        for curve in self._Curve_objects:
+        for curve in self._plot_objects:
+            if not isinstance(curve, Curve): continue # Should not happen if filtered, but good for safety
+
             X = curve.Xs
             Y = curve.Ys
 
@@ -881,7 +1332,16 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
                     capthick=curve.curve_width,
                     capsize=2
                 )
+        
+        # Legend
+        if self.plot_legend and legend_handles:
+            if not self.legend_font_size:
+                self.legend_font_size = self.font_size
+            self._ax.legend(fontsize=self.legend_font_size)
 
+        self._finalize_plot_settings()
+
+    def _finalize_plot_settings(self):
         # Apply log scales
         if self.x_log:
             self._ax.set_xscale('log')
@@ -928,21 +1388,15 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             if top is not None:
                 self._ax.set_ylim(top=top)
 
-        # Legend
-        if self.plot_legend and legend_handles:
-            if not self.legend_font_size:
-                self.legend_font_size = self.font_size
-            self._ax.legend(fontsize=self.legend_font_size)
-
         # Connect events (e.g. mouse click)
         self._fig.canvas.mpl_connect('button_press_event', on_mouse_click)
 
-        # Tight layout and draw
+        # Apply the pre-calculated layout to ensure fixed axis size
         self._fig.subplots_adjust(
-            left=0.15,
-            right=0.95,
-            top=0.95,
-            bottom=0.15
+            left=self._layout_params['left'],
+            right=self._layout_params['right'],
+            top=self._layout_params['top'],
+            bottom=self._layout_params['bottom']
         )
         # self._fig.tight_layout()
         self._canvas.draw()
@@ -961,14 +1415,14 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
     def save_plot_history(self, output_filename):
         plot_history_folder = os.path.join(filename_parent(output_filename), "Plot_History")
         os.makedirs(plot_history_folder, exist_ok=True)
-        csv_path = os.path.join(plot_history_folder, filename_stem(output_filename) + ".csv")
+        csv_path = os.path.join(plot_history_folder, filename_replace_last_append(filename_name(output_filename),".csv"))
         csv_path = get_unused_filename(csv_path)
 
         data_columns = []
         headers = []
         max_len = 0
 
-        for i, curve in enumerate(self.Curve_objects):
+        for i, curve in enumerate(self.plot_objects):
             # Use original data
             xs = list(curve.Xs)
             ys = list(curve.Ys)
@@ -998,22 +1452,23 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
         # Log title and filename if title exists
         if hasattr(self, 'current_title') and self.current_title:
-            filename = os.path.basename(output_filename)
-            
             if not hasattr(self, 'log_filenames'):
                 self.log_filenames = {}
             
             if plot_history_folder not in self.log_filenames:
-                base_log = os.path.join(plot_history_folder, f"0_Plot_Infos_{filename}.txt")
-                self.log_filenames[plot_history_folder] = get_unused_filename(base_log)
+                os.makedirs(plot_history_folder, exist_ok=True)
+                base_log_filename = filename_name(output_filename)
+                base_log_filename = f"0_Plot_Infos_{replace_last_append(base_log_filename, "txt")}"
+                base_log = get_unused_filename(os.path.join(plot_history_folder, base_log_filename))
+                self.log_filenames[plot_history_folder] = base_log
             
             log_file = self.log_filenames[plot_history_folder]
 
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"{filename}\tPlot Title\t{self.current_title}\n")
+                f.write(f"{log_file}\tPlot Title\t{self.current_title}\n")
 
 
-    def save_png(self, output_filename, dpi=None, bbox_inches="tight"):
+    def save_png(self, output_filename, dpi=None, bbox_inches:Optional[str]="tight"):
         """
         Save the current plot as a PNG file.
         Also saves the numerical data of the curves to a CSV file in a 'Numeric_Plot_Data' subfolder.
@@ -1024,6 +1479,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         :param bbox_inches: Bounding box in inches: 'tight' or None.
         """
         dpi = dpi or self.save_img_dpi
+        output_filename = filename_replace_last_append(output_filename, ".png")
         self._fig.savefig(output_filename, dpi=dpi, bbox_inches=bbox_inches)
 
         self.save_plot_history(output_filename)
@@ -1036,8 +1492,79 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
         :param output_filename: The path to save the SVG file.
         """
+        output_filename = filename_replace_last_append(output_filename, ".svg")
         self._fig.savefig(output_filename, bbox_inches="tight")
         self.save_plot_history(output_filename)
+
+
+    def percentage_zoom_Y(self, percentile=0.8, ensure_last_points=0.2, lower_limit_only = False, upper_limit_only = False):
+        """
+        Automatically adjust y_lim based on data.
+        :param percentile: ratio of data to cover (0 < p <= 1). Default 0.8.
+                            We calculate the range [50 - 50*p, 50 + 50*p] percentile for each curve,
+                            then take the unions. 
+                            If 0.8, we take [10%, 90%] of the data range.
+        :param ensure_last_points: 
+                            if <= 1, ratio of last points to keep (e.g. 0.2 means last 20%).
+                            if >= 2, count of last points.
+                            These points are GUARANTEED to be in the view range.
+                            
+        The final range is expanded by 5% on both ends.
+        """
+        all_min = []
+        all_max = []
+        import numpy as np
+        
+        for curve in self.plot_objects:
+            if not isinstance(curve, Curve): continue
+            Ys = np.array(curve.Ys, dtype=float)
+            if len(Ys) == 0: continue
+            
+            # 1. Percentile range (centered)
+            # e.g. 0.8 -> 10% to 90%
+            p_low = (1.0 - percentile) / 2.0 * 100
+            p_high = (1.0 + percentile) / 2.0 * 100
+            
+            c_min = np.percentile(Ys, p_low)
+            c_max = np.percentile(Ys, p_high)
+            all_min.append(c_min)
+            all_max.append(c_max)
+            
+            # 2. Last points
+            if ensure_last_points > 0:
+                count = 0
+                if ensure_last_points <= 1:
+                    count = int(len(Ys) * ensure_last_points)
+                    count = max(count, 1) # At least 1 if ratio provided?
+                else:
+                    count = int(ensure_last_points)
+                
+                # Careful with count > len(Ys)
+                last_Ys = Ys[-count:] if count < len(Ys) else Ys
+                if len(last_Ys) > 0:
+                    all_min.append(np.min(last_Ys))
+                    all_max.append(np.max(last_Ys))
+        
+        if not all_min: return # No data
+        
+        final_min = min(all_min)
+        final_max = max(all_max)
+        
+        # Expansion
+        span = final_max - final_min
+        if span == 0:
+                span = abs(final_max) * 0.1 if final_max != 0 else 1.0
+                
+        final_min -= span * 0.05
+        final_max += span * 0.05
+        
+        if upper_limit_only:
+            final_min = self.y_lim[0] if self.y_lim else None
+        if lower_limit_only:
+            final_max = self.y_lim[1] if self.y_lim else None
+        self.y_lim = (final_min, final_max)
+        self._update_plot()
+
 
 
 def integrate_discrete_points(x_values, y_values, start_range, end_range):
@@ -1587,20 +2114,74 @@ def gaussian_peaks_fitting(X, Y, max_gaussians=10):
     return ret, residue
 
 
+def xyz_triples_to_2D_list(xyz_triples, default_value="", print_table=True, output_file = None):
+    """
+    Convert a list of [x, y, z] to X_headers, Y_headers, and Z_matrix[x_idx][y_idx].
+    X_headers will be the row headers (index of outer list of Z_matrix).
+    Y_headers will be the column headers (index of inner list of Z_matrix).
+    :param xyz_triples: List of [x, y, z]
+    :param default_value: Value to fill if (x, y) is missing
+    :param print_table: Boolean, whether to print the table to stdout
+    :return: Xs, Ys, Z_matrix
+    """
+    print(output_file)
+    Xs = sorted(list(set([x[0] for x in xyz_triples])))
+    Ys = sorted(list(set([x[1] for x in xyz_triples])))
+
+    Z_matrix = [[default_value for _ in range(len(Ys))] for _ in range(len(Xs))]
+
+    # Map coordinates to indices
+    x_map = {x: i for i, x in enumerate(Xs)}
+    y_map = {y: i for i, y in enumerate(Ys)}
+
+    for item in xyz_triples:
+        x, y = item[0], item[1]
+        z = item[2] if len(item) > 2 else default_value
+        if x in x_map and y in y_map:
+             Z_matrix[x_map[x]][y_map[y]] = z
+
+    if print_table:
+        # Print Header
+        if output_file is not None:
+            with open(output_file, 'a', encoding='utf-8') as f:
+                f.write("\t" + "\t".join([str(y) for y in Ys]) + "\n")
+        print("\t" + "\t".join([str(y) for y in Ys]))
+        for i, x in enumerate(Xs):
+            row_str = str(x) + "\t" + "\t".join([str(z) for z in Z_matrix[i]])
+            print(row_str)
+            if output_file is not None:
+                with open(output_file, 'a', encoding='utf-8') as f:
+                    f.write(row_str)
+
+    if output_file:
+        print("File saved to:", output_file)
+
+    return Xs, Ys, Z_matrix
+
+
 if __name__ == "__main__":
-    a = Plot()
-    b = Plot()
-    input("123")
-    X = [1, 2, 3, 4, 5]
-    # a = Plot(Curve(X, [random.random() for _ in range(len(X))]),shift_window=(1,0),title='123')
-    # b = Plot(Curve(X, [random.random() for _ in range(len(X))]),shift_window=(0,0))
-    # a.pause(1)
-    count = 1
-    while True:
-        X = [1, 2, 3, 4, 5]
-        Y = [random.random() for _ in range(len(X))]
-        a.Curve_objects = (Curve(X, [random.random() for _ in range(len(X))]))
-        b.Curve_objects = (Curve(X, [random.random() for _ in range(len(X))]))
-        a.set_figure_title(count)
-        b.set_figure_title(count)
-        count += 1
+    a = read_xlsx(r"E:\My_Program\Voldy_Lamp_Tests\Self_Lamp_Tests\F110\0 Selected UVI Table.xlsx", all_sheets=True)
+    table = a['5.0 (4)']
+    if "X↓" in table[0][0] and "Y→" in table[0][0]:
+        X_along_row = False
+    elif "X→" in table[0][0] and "Y↓" in table[0][0]:
+        X_along_row = True
+    XYZs = list_2D_with_header_to_xyz_triples(table, X_along_row=not X_along_row)
+    my_grid = Grid(
+        XYZ_triples=XYZs,
+        do_interpolation=False,
+        # interpolation_type='linear',
+        # smoothing=50,
+        Z_axis_colors=[(0, blue_color), (0.5, green_color), (5, orange_color), (15, red_color)],
+        show_contour=True,
+        contour_values=[0.5,1,5],
+        show_contour_labels=True,
+        contour_style=solid_line,
+        contour_do_interpolation=True,
+        contour_interpolation_type='b_spline',
+        contour_smoothing=0.5,
+        grid_line_X=True,
+        grid_line_Y=True
+    )
+    
+    Plot(my_grid, figure_title="Grid Plot Test", fig_size=(10,6)).pause()
