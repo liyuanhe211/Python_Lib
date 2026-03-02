@@ -1,0 +1,304 @@
+# -*- coding: utf-8 -*-
+__author__ = 'LiYuanhe'
+
+import sys
+import os
+import math
+import copy
+import shutil
+import re
+import time
+import random
+import threading
+import queue as _queue
+import numpy as np
+import platform
+
+from Python_Lib.My_Lib_Stock import *
+from Python_Lib.My_Lib_File import *
+import subprocess
+
+if platform.system() == "Windows":
+    multiwfn_folder = os.path.join(filename_class(os.path.realpath(__file__)).path, "Multiwfn_executable",'Windows')
+    multiwfn_executable = os.path.join(multiwfn_folder, 'Multiwfn.exe')
+    ini_file = os.path.join(multiwfn_folder, 'settings.ini')
+else:
+    multiwfn_folder = os.path.join(filename_class(os.path.realpath(__file__)).path, "Multiwfn_executable",'Linux')
+    multiwfn_executable = os.path.join(multiwfn_folder, 'Multiwfn_noGUI')
+    ini_file = os.path.join(multiwfn_folder, 'settings.ini')
+
+assert os.path.isfile(multiwfn_executable), f"Multiwfn executable not found at {multiwfn_executable}. Please check the path and filename."
+assert os.path.isfile(ini_file), f"settings.ini file not found at {ini_file}. Please check the path and filename."
+os.environ['Multiwfnpath'] = multiwfn_folder
+
+def show_command_list(commands):
+    ret = []
+    for i in commands:
+        if callable(i):
+            ret.append(i.__name__ + "()")
+        else:
+            ret.append(str(i))
+    return ret
+
+def modify_settings_ini_file(multiwfn_folder, items_value_dict: dict):
+    settings_ini_path = os.path.join(multiwfn_folder, "settings.ini")
+
+    with open(settings_ini_path) as settings_ini_current_content:
+        settings_ini_current_content = settings_ini_current_content.readlines()
+
+    settings_ini_new_content = copy.deepcopy(settings_ini_current_content)
+    for item, value in items_value_dict.items():
+        value = str(value)
+        for count, line in enumerate(settings_ini_new_content):
+            if item in line:
+                re_ret = re.findall(r'(\s+' + item + r'= )(.+)( \/\/.+)', line)
+                new_line = re_ret[0][0] + value + re_ret[0][2].rstrip('\n') + '\n'
+                new_line = "".join(new_line)
+                settings_ini_new_content[count] = new_line
+                break
+
+    with open(settings_ini_path, 'w') as settings_ini_new_content_object:
+        settings_ini_new_content_object.write("".join(settings_ini_new_content))
+
+
+def run_multiwfn(multiwfn_folder,
+                 input_file,
+                 commands,
+                 settings_ini_change_dict={},
+                 output_file_prefix="",
+                 output_file_suffix=""):
+    """
+    Runs multiwfn, copy the newly generated file to the original place, while renaming to a name that's input_filename + genreated_file_name
+    Args:
+        multiwfn_folder:
+        input_file:
+        commands: a list of commands, one item per line,
+                  \n not included,
+                  numbers will be automatically convert to str e.g. [4,7,1,'',4,'3,1,2','-6']
+                  callables will be run with the input file as the parameter, e.g. to provide additional input, like fchk & out file
+        settings_ini_change_dict:
+        output_file_prefix:
+        output_file_suffix:
+
+    Returns:
+
+    """
+    if not output_file_prefix:
+        output_file_prefix = filename_class(input_file).only_remove_append
+    output_file_prefix = output_file_prefix + "_M_" + ("[" + output_file_suffix + "]" if output_file_suffix else "")
+    input_file_abs = os.path.abspath(input_file)
+
+    # create temp Multiwfn exe folder
+    if not os.path.isdir(os.path.realpath("temp")):
+        os.mkdir('temp')
+    target_multiwfn_folder = get_unused_filename(os.path.join('temp', 'Multiwfn'))
+    shutil.copytree(os.path.realpath(multiwfn_folder), target_multiwfn_folder)
+    target_multiwfn_folder = os.path.realpath(target_multiwfn_folder)
+    os.chdir(target_multiwfn_folder)
+    original_content = os.listdir(target_multiwfn_folder)
+
+    # change settings.ini
+    settings_ini_change_dict['isilent'] = 1
+    modify_settings_ini_file(target_multiwfn_folder, settings_ini_change_dict)
+
+    # Determine log file paths (next to the input file)
+    timestamp = readable_timestamp()
+    input_file_base = filename_class(input_file_abs).only_remove_append
+    input_history_path = input_file_base + ".Multiwfn.Input_History_" + timestamp + ".log"
+    input_history_path = get_unused_filename(input_history_path)
+    output_history_path = input_file_base + ".Multiwfn.Output_History_" + timestamp + ".log"
+    output_history_path = get_unused_filename(output_history_path)
+
+    os.environ['Multiwfnpath'] = target_multiwfn_folder
+    local_executable = os.path.join(target_multiwfn_folder, os.path.basename(multiwfn_executable))
+
+    # Prepare all commands (input file path + user commands)
+    all_commands = [str(input_file)] + [str(c) for c in commands]
+
+    # Start process with unbuffered I/O for responsive output reading
+    process = subprocess.Popen(
+        local_executable,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=target_multiwfn_folder,
+        bufsize=0
+    )
+
+    # Background thread to read process output
+    output_queue = _queue.Queue()
+
+    def _reader():
+        try:
+            while True:
+                data = process.stdout.read(4096)
+                if not data:
+                    break
+                output_queue.put(data.decode('gbk', errors='replace'))
+        except (OSError, ValueError):
+            pass
+        finally:
+            output_queue.put(None)  # EOF sentinel
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
+    def drain_output(timeout=0.02):
+        """Read all available output until no new data for `timeout` seconds.
+        Prints each chunk to stdout in real-time and returns (text, eof)."""
+        parts = []
+        eof = False
+        while True:
+            try:
+                chunk = output_queue.get(timeout=timeout)
+                if chunk is None:
+                    eof = True
+                    break
+                chunk = chunk.replace('\r\n', '\n')
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+                parts.append(chunk)
+            except _queue.Empty:
+                break
+        return ''.join(parts), eof
+
+    io_log = ""
+    input_log = ""
+
+    # Feed all commands immediately without waiting for output
+    for cmd in all_commands:
+        # Record command in logs and echo to terminal
+        sys.stdout.write("\n>>> " + cmd + "\n")
+        sys.stdout.flush()
+        # io_log += "\n\n>>> " + cmd + "\n\n\n----------------------------------\n"
+        input_log += cmd + "\n"
+
+        # Send command to process
+        try:
+            process.stdin.write((cmd + '\n').encode('gbk'))
+            process.stdin.flush()
+        except (OSError, BrokenPipeError):
+            break
+
+    # Close stdin and drain remaining output
+    try:
+        process.stdin.close()
+    except OSError:
+        pass
+
+    while True:
+        text, eof = drain_output(timeout=5.0)
+        if text:
+            io_log += text + "----------------------------------\n"
+        if eof or not text:
+            break
+
+    reader_thread.join(timeout=30)
+    process.wait()
+
+    # Save log files
+    with open(output_history_path, 'w', encoding='utf-8') as f:
+        f.write(io_log)
+    with open(input_history_path, 'w', encoding='utf-8') as f:
+        f.write(input_log)
+    print(f"Saved Output history: {output_history_path}")
+    print(f"Saved Input history: {input_history_path}")
+
+    output_files = []
+
+    # extract output files
+    for file in os.listdir(target_multiwfn_folder):
+        if file not in original_content:
+            target_output_filename = get_unused_filename(output_file_prefix + file)
+            shutil.copy(os.path.join(target_multiwfn_folder, file), target_output_filename)
+            output_files.append(target_output_filename)
+
+    # remove temp Multiwfn
+    os.chdir(filename_class(sys.argv[0]).path)
+    shutil.rmtree(target_multiwfn_folder)
+    return output_files, input_history_path, output_history_path
+
+def get_singlet_excited_states(previous_inputs, previous_outputs):
+    """
+    read excited states from output of 18/15 of Multiwfn,
+    return a list of singlet excited state numbers to global variable singlet_states
+
+    e.g.
+    Input:
+         The reference state is closed-shell
+         The number of basis functions:   703
+         Note: This file is recognized as a Gaussian output file
+         There are   8 excited states, loading basic information...
+
+         Loading configuration coefficients...
+         Summary of excited states:
+         Exc.state#     Exc.energy(eV)     Multi.   MO pairs    Normalization
+           1           2.77700           3           11        0.461698
+           2           3.23900           3           14        0.466362
+           3           3.45340           3           12        0.465280
+           4           3.77030           3           13        0.457104
+           5           3.91130           1           11        0.468954
+           6           3.96140           3           18        0.437162
+           7           4.20470           1           11        0.465570
+           8           4.52780           1            5        0.484647
+
+         HOMO index:    62
+         ...
+
+    Return:
+        ["5","7","8"]
+    """
+    output = previous_outputs[-1].splitlines()
+    singlet_states = [re.findall(r"(\d+)\s+-*\d+\.\d+\s+1\s+\d+\s+-*\d+\.\d+") for x in output]
+    singlet_states = [x for x in singlet_states if x]
+    return singlet_states
+
+
+def integral_cube_file_splited_by_plain(cube_x_y_z_value_file, plane_origin: np.array, plane_vector: np.array, selected_centers: list, all_centers,
+                                        radius=1.0 / bohr__A):
+    '''
+    
+    :param cube_x_y_z_value_file: A file generated by Multiwfn 13-1
+    :param plain_origin: 
+    :param plain_vector: 
+    :return: 
+    '''
+
+    # 每个原子附近单独处理
+    up_sum = [0 for x in range(len(selected_centers))]
+    down_sum = [0 for x in range(len(selected_centers))]
+    abs_sum = [0 for x in range(len(selected_centers))]
+    selected_centers = [np.array(x) for x in selected_centers]
+    all_abs_sum = 0
+
+    for count, line in enumerate(open(cube_x_y_z_value_file)):
+        if count % 100000 == 0:
+            print(count)
+
+        line = [float(x) for x in line.split()]
+        if len(line) != 4:
+            continue
+        coord = np.array(line[:3])
+        value = line[3]
+        direction = np.dot(coord - plane_origin, plane_vector)
+        for atom_count, atom in enumerate(all_centers):
+            in_sphere = np.linalg.norm(atom - coord) < radius
+            if in_sphere:
+                all_abs_sum += abs(value)
+                for selected_atom_count, selected_center in enumerate(selected_centers):
+                    if np.equal(selected_center, atom).all():
+                        abs_sum[selected_atom_count] += abs(value)
+                        if direction > 0:
+                            up_sum[selected_atom_count] += value
+                            # up_square_sum[atom_count]+=value**2
+                        elif direction < 0:
+                            down_sum[selected_atom_count] += value
+                    # down_square_sum[atom_count] += value ** 2
+    for i in range(len(selected_centers)):
+        print(abs_sum[i], up_sum[i], down_sum[i])
+
+    print(all_abs_sum)
+    # print(up_square_sum,down_square_sum)
+
+if __name__ == "__main__":
+    pass
