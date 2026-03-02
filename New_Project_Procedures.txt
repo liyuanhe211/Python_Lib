@@ -1,4 +1,9 @@
 git init
-git submodule add https://github.com/liyuanhe211/Python_Lib.git
 uv init
 uv venv
+uv add --editable "E:\My_Program\Python_Lib" --config-settings editable_mode=strict
+
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+pip install --editable "E:\My_Program\Python_Lib" --config-settings editable_mode=strict
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
