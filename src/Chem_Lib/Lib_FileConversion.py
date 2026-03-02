@@ -25,7 +25,7 @@ def babel_conversion(input_file, output_file):
     obabel_path = os.path.join(filename_parent(__file__),"OpenBabel-2.3.2","babel.exe")
 
     # Command to convert GJF to Mol2 using Open Babel
-    command = [obabel_path, gjf_file, '-O', mol2_file]
+    command = [obabel_path, input_file, '-O', output_file]
 
     try:
         # Execute the command

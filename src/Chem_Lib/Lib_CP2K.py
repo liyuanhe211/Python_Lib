@@ -6,12 +6,9 @@ import re
 import sys
 import pathlib
 
-parent_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(parent_path)
-
 from Python_Lib.My_Lib_Stock import *
-from Lib_Constants import *
-from Lib_Coordinates import *
+from .Lib_Constants import *
+from .Lib_Coordinates import *
 
 CP2K_Input_Node_type = TypeVar("CP2K_Input_Node_type", bound="CP2K_Input_Node")
 

@@ -10,8 +10,8 @@ import re
 import time
 import random
 
-from My_Lib_Stock import *
-from Lib import Gaussian_output, fluctuation_determine
+from Python_Lib.My_Lib_Stock import *
+from .Lib import Gaussian_output, fluctuation_determine
 
 
 # a simpler, less-dependent lib that is used by servers
@@ -21,7 +21,7 @@ def status(gaussian_output_file):
     :param gaussian_output_file:
     :return:
     """
-    from Lib import Gaussian_output, fluctuation_determine
+    from .Lib import Gaussian_output, fluctuation_determine
     ret = {"last_link": -1,
            "current_step": -1,
            "opt_step_count": -1,

@@ -7,7 +7,7 @@ __author__ = 'LiYuanhe'
 # sys.path.insert(0,parent_path)
 
 from Python_Lib.My_Lib_PyQt6 import *
-from Lib.Lib_Utilities import fluctuation_determine
+from .Lib_Utilities import fluctuation_determine
 
 import matplotlib
 
@@ -271,10 +271,7 @@ class MpWidget_All(QWidget):
 
     def Converged_Update(self, data=(), geometries=()):
 
-        import pathlib
-        Lib_path = str(pathlib.Path(__file__).parent.resolve())
-        sys.path.append(Lib_path)
-        from RMSD_by_cartesian import generate_rmsd_list
+        from .RMSD_by_cartesian import generate_rmsd_list
 
         self.original_converged_data = copy.deepcopy(data)
         self.rmsd_geometries = copy.deepcopy(geometries)

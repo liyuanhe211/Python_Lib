@@ -7,21 +7,18 @@ import sys
 import pyexcel
 import numpy as np
 
-parent_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(parent_path)
-
 # from Python_Lib.My_Lib_PyQt6 import *
-# from Lib_Coordinates import *
-from Lib_Coordinates import Coordinates
-from Lib_Gaussian import *
-from Lib_CP2K import *
-from Lib_Data import *
-from Lib_Filetype import Filetype, file_type
-from Lib_GUI import *
-from Lib_MOPAC import *
-from Lib_ORCA import *
-from Lib_xTB import *
-from Lib_Utilities import *
+# from .Lib_Coordinates import *
+from .Lib_Coordinates import Coordinates
+from .Lib_Gaussian import *
+from .Lib_CP2K import *
+# from .Lib_Data import *  # Lib_Data not found, commented out
+from .Lib_Filetype import Filetype, file_type
+from .Lib_GUI import *
+from .Lib_MOPAC import *
+from .Lib_ORCA import *
+from .Lib_xTB import *
+from .Lib_Utilities import *
 
 
 def unify_basis(input_str: str):

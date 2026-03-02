@@ -3,9 +3,6 @@ import os
 import pathlib
 import sys
 
-parent_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(parent_path)
-
 from Python_Lib.My_Lib_Stock import *
 
 fluctuation_message = ""  # 用于记录震荡的提示，重复的不要输出

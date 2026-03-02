@@ -3,10 +3,8 @@ __author__ = 'LiYuanhe'
 
 import sys
 import pathlib
-parent_path = str(pathlib.Path(__file__).parent.parent.resolve())
-sys.path.insert(0,parent_path)
 from Python_Lib.My_Lib import *
-from Lib.Lib import *
+from .Lib import *
 import pickle
 import community
 
