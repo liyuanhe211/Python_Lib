@@ -18,7 +18,7 @@ dependencies = [
 
 [tool.setuptools]
 # 1. Define the package name explicitly as "Python_Lib"
-packages = ["Python_Lib", "LLM_Lib"]
+packages = ["Python_Lib", "LLM_Lib", "Chem_Lib"，"Machine_Learning_Lib"]
 # 2. Enable inclusion of non-code files (like .txt or .dll)
 include-package-data = true
 
