@@ -2,6 +2,7 @@
 __author__ = 'LiYuanhe'
 import os
 import math
+from Python_Lib.My_Lib_Stock import *
 
 TEMP_FOLDER_PATH = get_config(open_config_file(), 'Temp_Path', r"D:\Gaussian\Temp")
 if not os.path.isdir(TEMP_FOLDER_PATH):

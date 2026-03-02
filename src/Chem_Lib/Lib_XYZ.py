@@ -7,7 +7,7 @@ __author__ = 'LiYuanhe'
 # sys.path.insert(0,parent_path)
 
 from Python_Lib.My_Lib_Stock import *
-from Lib.Lib_Coordinates import *
+from .Lib_Coordinates import *
 
 
 class XYZ_file:

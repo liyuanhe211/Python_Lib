@@ -3,12 +3,7 @@ __author__ = 'LiYuanhe'
 
 import subprocess
 
-import sys
-import pathlib
-
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
+from Python_Lib.My_Lib_Stock import *
 
 
 def get_canonical_smiles(original_smiles):
@@ -68,7 +63,7 @@ def angle_of_np_vectors(v1, v2):
 
 def smiles_from_xyz(input_file):
     import subprocess
-    babel_exe = r"C:\Program Files (x86)\OpenBabel-2.3.2\babel.exe"
+    babel_exe = os.path.join(filename_class(os.path.realpath(__file__)).path, 'OpenBabel-2.3.2', 'babel.exe')
     assert os.path.isfile(babel_exe), "OpenBabel not found."
     temp_file = r"Temp\temp_xyz_file_for_smiles.smi"
 

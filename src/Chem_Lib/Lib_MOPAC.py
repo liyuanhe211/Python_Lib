@@ -7,6 +7,7 @@ __author__ = 'LiYuanhe'
 # sys.path.insert(0,parent_path)
 
 from Python_Lib.My_Lib_Stock import *
+from .Lib_Coordinates import *
 
 def build_mopac_route_dict(line: str) -> dict:
     """

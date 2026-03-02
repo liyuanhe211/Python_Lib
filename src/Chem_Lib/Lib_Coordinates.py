@@ -6,11 +6,8 @@ import pathlib
 import sys
 import numpy as np
 
-parent_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(parent_path)
-
-from Lib_Constants import *
-from Python_Lib.My_Lib_Chemistry import get_bonds
+from .Lib_Constants import *
+from .Lib_Chemistry import get_bonds
 
 
 class Coordinates:
