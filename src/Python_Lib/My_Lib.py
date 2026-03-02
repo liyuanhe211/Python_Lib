@@ -11,7 +11,6 @@ import pathlib
 Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
 sys.path.append(Python_Lib_path)
 from My_Lib_Stock import *
-from My_Lib_Chemistry import *
 from My_Lib_Color import *
 from My_Lib_Image import *
 from My_Lib_Network import *

@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 __author__ = 'LiYuanhe'
 
-import os
+import sys
+import pathlib
+import platform
+import faulthandler
+faulthandler.enable()
+
 from PyQt6 import QtGui, QtCore, QtWidgets, uic
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
     QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog, \
@@ -10,9 +15,17 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
     QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
     QTableWidgetItem, QFrame, QSpacerItem, QSizePolicy, QTableWidget
 from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
-from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess
+from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess, QObject
 from PyQt6.QtCore import Qt as QtCore_Qt
 from PyQt6.QtCore import QEvent
+
+Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
+sys.path.append(Python_Lib_path)
+from My_Lib_Stock import *
+from My_Lib_System import is_headless
+
+if platform.system() == 'Windows':
+    os.environ['QT_QPA_FONTDIR'] = 'C:/Windows/Fonts'
 
 Qt_Keys = QtCore_Qt.Key
 Qt_Colors = QtCore_Qt.GlobalColor
@@ -57,10 +70,165 @@ import platform
 import sys
 import pathlib
 
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
+def check_and_install_fonts():
+    import platform
+    import os
+    import shutil
+    import glob
+    import matplotlib
+    import matplotlib.font_manager as font_manager
+    from PyQt6.QtGui import QFontDatabase
+    from PyQt6.QtCore import QCoreApplication
 
+    # Locate local fonts dir relative to this file
+    # This file: .../src/Python_Lib/My_Lib_PyQt6.py
+    # Fonts dir: .../fonts/
+    current_dir = pathlib.Path(__file__).parent.resolve()
+    project_root = current_dir.parent.parent
+    local_fonts_dir = project_root / "fonts"
+
+    if not local_fonts_dir.exists():
+        # print(f"Fonts folder not found at {local_fonts_dir}")
+        return
+
+    # Find all font files (ttf, otf)
+    font_files = list(local_fonts_dir.glob("*.[tT][tT][fF]")) + \
+                 list(local_fonts_dir.glob("*.[oO][tT][fF]"))
+
+    if not font_files:
+        return
+
+    system = platform.system()
+    
+    # ---------------------------------------------------------
+    # 1. System/User Installation (Persistent)
+    # ---------------------------------------------------------
+    if system == 'Linux':
+        user_font_dir = os.path.expanduser("~/.local/share/fonts")
+        try:
+            if not os.path.exists(user_font_dir):
+                os.makedirs(user_font_dir)
+
+            need_rebuild = False
+            for font_path in font_files:
+                font_name = font_path.name
+                dest_path = os.path.join(user_font_dir, font_name)
+                
+                if not os.path.exists(dest_path):
+                    # print(f"Installing font {font_name} on Linux...")
+                    try:
+                        shutil.copy2(font_path, dest_path)
+                        need_rebuild = True
+                    except Exception as e:
+                        # print(f"Failed to copy {font_name}: {e}")
+                        pass
+            
+            if need_rebuild:
+                # print("Rebuilding matplotlib font cache...")
+                try:
+                    # font_manager._load_fontmanager(try_read_cache=False)
+                    import subprocess
+                    subprocess.run(['fc-cache', '-f', '-v'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    pass
+        except Exception:
+            pass
+
+    elif system == 'Windows':
+        # On Windows, we just try to copy to User Fonts if not present in System Fonts
+        # Fully installing usually requires Registry modification which is risky in a generic script.
+        # But we can check standard paths.
+        
+        # Standard System Fonts
+        win_fonts = pathlib.Path(os.environ.get('WINDIR', 'C:\\Windows')) / 'Fonts'
+        
+        # User Fonts (Windows 10+)
+        local_appdata = os.environ.get('LOCALAPPDATA')
+        user_fonts = None
+        if local_appdata:
+            user_fonts = pathlib.Path(local_appdata) / 'Microsoft' / 'Windows' / 'Fonts'
+
+        for font_path in font_files:
+            font_name = font_path.name
+            
+            try:
+                # Check if exists in C:\Windows\Fonts
+                if (win_fonts / font_name).exists():
+                    continue
+                
+                # Check if exists in User Fonts
+                if user_fonts and (user_fonts / font_name).exists():
+                    continue
+                    
+                # If missing, try to install to User Fonts (easiest without Admin)
+                if user_fonts:
+                    if not user_fonts.exists():
+                        try:
+                            os.makedirs(user_fonts, exist_ok=True)
+                        except:
+                            pass
+                    
+                    dest = user_fonts / font_name
+                    try:
+                        # print(f"Installing font {font_name} on Windows (User Scope)...")
+                        shutil.copy2(font_path, dest)
+                        # Note: Without registry key, this survives but isn't registered system-wide on reboot.
+                        # But QFontDatabase below handles the runtime session.
+                    except Exception as e:
+                        # print(f"Failed to install font {font_name} on Windows: {e}")
+                        pass
+            except Exception:
+                pass
+
+    # ---------------------------------------------------------
+    # 2. Runtime Loading (Immediate usage for this process)
+    # ---------------------------------------------------------
+    # This ensures PyQt and Matplotlib see the fonts regardless of installation success
+    
+    # Initialize ctypes for Windows fallback
+    add_font_resource_ex = None
+    if system == 'Windows':
+        try:
+            import ctypes
+            # FR_PRIVATE = 0x10 protects the font from other processes and doesn't require install
+            # But here we want it available to the process.
+            add_font_resource_ex = ctypes.windll.gdi32.AddFontResourceExW
+        except Exception:
+            pass
+
+    has_qapp = (QCoreApplication.instance() is not None)
+
+    for font_path in font_files:
+        try:
+            str_path = str(font_path)
+            
+            # Add to Matplotlib (needed even in headless for plot generation)
+            try:
+                font_manager.fontManager.addfont(str_path)
+            except Exception:
+                pass
+
+            # Add to PyQt6 
+            if not is_headless():
+                # Use QFontDatabase if App exists (Safest/Correct way)
+                if has_qapp:
+                    QFontDatabase.addApplicationFont(str_path)
+                
+                # Windows Fallback: If no App, use GDI to load font for process
+                elif add_font_resource_ex:
+                    try:
+                        # FR_PRIVATE = 0x10
+                        add_font_resource_ex(str_path, 0x10, 0)
+                    except Exception:
+                        pass
+                
+        except Exception:
+            pass
+
+if __name__ != '__main__':
+    print("Checking fonts...")
+    check_and_install_fonts()
+    print("Font checking complete.")
 
 #
 # def set_Windows_scaling_factor_env_var():
