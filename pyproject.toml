@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "LYH_Python_Lib"
+version = "0.1.0"
+description = "My personal Python library"
+requires-python = ">=3.9"
+dependencies = [
+    "google-genai>=1.47.0",
+    "keyboard>=0.13.5",
+    "pypdf>=6.7.3",
+    "pyperclip>=1.11.0",
+    "PyQt6<=6.9.1",
+    "pywin32>=311",
+]
+
+[tool.setuptools]
+# 1. Define the package name explicitly as "Python_Lib"
+packages = ["Python_Lib", "LLM_Lib"]
+# 2. Enable inclusion of non-code files (like .txt or .dll)
+include-package-data = true
+
+[tool.setuptools.package-dir]
+# 3. CRITICAL: Map the "Python_Lib" package to the current directory (".")
+# This transforms "My_Lib.py" into "Python_Lib.My_Lib"
+Python_Lib = "src/Python_Lib"
+Machine_Learning_Lib = "src/Machine_Learning_Lib"
+Chem_Lib = "src/Chem_Lib"
+LLM_Lib = "src/LLM_Lib"
+
+[tool.setuptools.package-data]
+# If you have non-python files (dlls, txts) in the root, include them here:
+Python_Lib = [
+    "phantomjs.exe",
+]
+Chem_Lib = [
+	"glfw/glfw3.lib",
+	"glfw/glfw3dll.lib",
+	"glfw/(Broken) show_molecule.py",
+	"glfw/__init__.py",
+	"glfw/glfw3.dll",
+    "mogli/glfw3.dll",
+    "mogli/glfw3.lib",
+    "mogli/glfw3dll.lib",
+    "mogli/mogli.py",
+    "Multiwfn_executable/Linux/LICENSE.txt",
+    "Multiwfn_executable/Linux/Multiwfn_noGUI",
+    "Multiwfn_executable/Linux/settings.ini",
+    "Multiwfn_executable/Linux/HOW TO INSTALL.txt",
+    "Multiwfn_executable/Windows/settings.ini",
+    "Multiwfn_executable/Windows/libiomp5md.dll",
+    "Multiwfn_executable/Windows/LICENSE.txt",
+    "Multiwfn_executable/Windows/Multiwfn.exe",
+	"OpenBabel-2.3.2/obspectrophore.exe",
+	"OpenBabel-2.3.2/openbabel.jar",
+	"OpenBabel-2.3.2/openbabel_csharp.dll",
+	"OpenBabel-2.3.2/openbabel_java.dll",
+	"OpenBabel-2.3.2/openbabel-2.dll",
+	"OpenBabel-2.3.2/plugin_charges.obf",
+	"OpenBabel-2.3.2/plugin_descriptors.obf",
+	"OpenBabel-2.3.2/plugin_fingerprints.obf",
+	"OpenBabel-2.3.2/plugin_forcefields.obf",
+	"OpenBabel-2.3.2/plugin_ops.obf",
+	"OpenBabel-2.3.2/sdf.bat",
+	"OpenBabel-2.3.2/Uninstall.exe",
+	"OpenBabel-2.3.2/xdr-0.dll",
+	"OpenBabel-2.3.2/zlib1.dll",
+	"OpenBabel-2.3.2/babel.exe",
+	"OpenBabel-2.3.2/formats_cairo.obf",
+	"OpenBabel-2.3.2/formats_common.obf",
+	"OpenBabel-2.3.2/formats_compchem.obf",
+	"OpenBabel-2.3.2/formats_misc.obf",
+	"OpenBabel-2.3.2/formats_utility.obf",
+	"OpenBabel-2.3.2/formats_xml.obf",
+	"OpenBabel-2.3.2/freetype6.dll",
+	"OpenBabel-2.3.2/iconv.dll",
+	"OpenBabel-2.3.2/libcairo-2.dll",
+	"OpenBabel-2.3.2/libexpat-1.dll",
+	"OpenBabel-2.3.2/libfontconfig-1.dll",
+	"OpenBabel-2.3.2/libinchi.dll",
+	"OpenBabel-2.3.2/libpng14-14.dll",
+	"OpenBabel-2.3.2/libxml2.dll",
+	"OpenBabel-2.3.2/License.txt",
+	"OpenBabel-2.3.2/obabel.exe",
+	"OpenBabel-2.3.2/obchiral.exe",
+	"OpenBabel-2.3.2/obconformer.exe",
+	"OpenBabel-2.3.2/obdepict.bat",
+	"OpenBabel-2.3.2/OBDotNet.dll",
+	"OpenBabel-2.3.2/obenergy.exe",
+	"OpenBabel-2.3.2/obfit.exe",
+	"OpenBabel-2.3.2/obgen.exe",
+	"OpenBabel-2.3.2/obgrep.exe",
+	"OpenBabel-2.3.2/obgui.exe",
+	"OpenBabel-2.3.2/obminimize.exe",
+	"OpenBabel-2.3.2/obprobe.exe",
+	"OpenBabel-2.3.2/obprop.exe",
+	"OpenBabel-2.3.2/obrms.exe",
+	"OpenBabel-2.3.2/obrotamer.exe",
+	"OpenBabel-2.3.2/obrotate.exe",
+    "indigo-cano.exe"
+]
