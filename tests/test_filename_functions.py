@@ -2,11 +2,16 @@
 __author__ = 'LiYuanhe'
 
 import unittest
-from My_Lib_Stock import *
-from My_Lib_Office import read_xlsx
+import os
+from Python_Lib.My_Lib_File import *
+from Python_Lib.My_Lib_Office import read_xlsx
 
 # (test_input, path, name, name_stem, append, replace_append_to('z'), replace_append_to("x.y"), insert_append("x.y"))
-test_cases = read_xlsx("Filename_functions_test_cases.xlsx")[1:]
+test_cases_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Filename_functions_test_cases.xlsx")
+data = read_xlsx(test_cases_file)
+if data is None:
+    raise ValueError(f"No data found in {test_cases_file}")
+test_cases = data[1:]
 inputs = [x[0] for x in test_cases]
 functions = [
     filename_parent,
