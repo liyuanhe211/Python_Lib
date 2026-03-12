@@ -5,41 +5,286 @@ from Python_Lib.My_Lib_Stock import *
 from .Lib_Coordinates import *
 from .Lib_Filetype import Filetype, file_type
 
-class Gaussian_input:
+class Gaussian_Input:
+    """
+    Parse and optionally modify a Gaussian input file.
 
-    # TODO: 实现一些简便的修改文件的函数
+    The file may contain multiple steps separated by ``--Link1--``.
+    Each step is represented by a :class:`Gaussian_Input_Step` instance stored in
+    ``self.steps``.
 
-    def __init__(self, path):
-        with open(path) as input_file:
-            input_data = input_file.readlines()
+    Modification workflow:
+        1. Create a ``Gaussian_Input(path)`` object.
+        2. Call modification methods (they accept a ``step`` parameter:
+           ``"ALL"`` to apply to every step, or an ``int`` index starting from 0).
+        3. Call :meth:`save` to write the modified file back to disk
+           (or :meth:`to_string` to get the text without writing).
 
-        input_data = [x.strip() for x in input_data]
-        self.step_list = remove_blank(split_list(input_data, "--link1--", lower_case_match=True))
-        self.step_count = len(self.step_list)
-        self.steps = [Gaussian_input_step(x) for x in self.step_list]
-        pass
+    Attributes:
+        path:        Original file path (str or None if constructed from text).
+        steps:       List of :class:`Gaussian_Input_Step`.
+        step_count:  Number of steps.
+        annotate_lines:  Annotation lines (e.g. ``!__NAMETAG__=...``) from file
+                         header (before the first step's link0 section).
+        annotates_dict:  Dict of annotation key→value from ``!__KEY__=VALUE``.
+        run_commands:    List of ``!RUN ...`` command strings.
+    """
+
+    def __init__(self, path_or_text, *, is_text: bool = False):
+        """
+        Args:
+            path_or_text:  File path (str), or raw text if ``is_text=True``.
+            is_text:       If True, treat *path_or_text* as file content rather
+                           than a file path.
+        """
+        if is_text:
+            self.path = None
+            raw_text = path_or_text
+        else:
+            self.path = str(path_or_text)
+            with open(self.path, encoding="utf-8", errors="ignore") as f:
+                raw_text = f.read()
+
+        # --- parse global annotation lines (from anywhere in the file) -------
+        self.annotate_lines: list[str] = []
+        self.annotates_dict: dict[str, str] = {}
+        self.run_commands: list[str] = []
+
+        # Collect ALL "!" annotation lines regardless of position, then strip
+        # them from the content before splitting into steps.
+        content_lines = raw_text.splitlines()
+        remaining_lines: list[str] = []
+        for line in content_lines:
+            if line.startswith("!"):
+                self.annotate_lines.append(line)
+            else:
+                remaining_lines.append(line)
+
+        # Parse annotation dicts and run commands
+        for line in self.annotate_lines:
+            m = re.findall(r"!__(.+?)__=(.+)", line)
+            if m:
+                self.annotates_dict[m[0][0]] = m[0][1]
+            m_run = re.findall(r"!RUN (.+)", line)
+            if m_run:
+                self.run_commands.append(m_run[0].strip())
+
+        # Rebuild content without annotation lines for step splitting
+        remaining_text = "\n".join(remaining_lines)
+
+        # --- split steps by --Link1-- --------------------------------------
+        # Split while preserving the separator so we can reconstruct later.
+        parts = re.split(r"(?i)(--link1--)", remaining_text)
+
+        step_texts: list[str] = []
+        for part in parts:
+            if re.match(r"(?i)--link1--", part.strip()):
+                continue  # skip separator
+            step_texts.append(part)
+
+        self.steps: list[Gaussian_Input_Step] = [
+            Gaussian_Input_Step(t) for t in step_texts
+        ]
+        self.step_count: int = len(self.steps)
+
+    # ------------------------------------------------------------------
+    # Step-dispatching helpers
+    # ------------------------------------------------------------------
+    def _resolve_steps(self, step) -> list[int]:
+        """Return list of 0-based step indices from a *step* argument."""
+        if isinstance(step, str) and step.upper() == "ALL":
+            return list(range(self.step_count))
+        if isinstance(step, int):
+            if step < 0 or step >= self.step_count:
+                raise IndexError(f"Step {step} out of range (0..{self.step_count - 1})")
+            return [step]
+        raise TypeError(f"step must be 'ALL' or int, got {type(step).__name__}")
+
+    # ------------------------------------------------------------------
+    # Modification methods  (step="ALL" | int)
+    # ------------------------------------------------------------------
+    def set_nprocshared(self, step, value: int):
+        """Set ``%nprocshared`` for the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].set_nprocshared(value)
+
+    def set_mem(self, step, mem_mb: int):
+        """Set ``%mem`` (in MB) for the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].set_mem(mem_mb)
+
+    def set_chk(self, step, chk_path: str):
+        """Set ``%chk`` for the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].set_chk(chk_path)
+
+    def set_oldchk(self, step, oldchk_path: str):
+        """Set ``%oldchk`` for the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].set_oldchk(oldchk_path)
+
+    def set_rwf(self, step, rwf_path: str):
+        """Set ``%rwf`` for the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].set_rwf(rwf_path)
+
+    def add_route_keyword(self, step, keyword: str, options: list[str] | str | None = None):
+        """Add a route keyword (and optional options) to the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].add_route_keyword(keyword, options)
+
+    def remove_route_keyword(self, step, keyword: str, options: list[str] | str | None = None):
+        """Remove a route keyword (or specific options) from the given step(s)."""
+        for i in self._resolve_steps(step):
+            self.steps[i].remove_route_keyword(keyword, options)
+
+    # ------------------------------------------------------------------
+    # Aggregate info accessors
+    # ------------------------------------------------------------------
+    @property
+    def nametag(self) -> str | None:
+        return self.annotates_dict.get("NAMETAG")
+
+    @property
+    def chk_files(self) -> list[str]:
+        return [s.chk for s in self.steps if s.chk]
+
+    @property
+    def rwf_files(self) -> list[str]:
+        return [s.rwf for s in self.steps if s.rwf]
+
+    def generate_job_name(self, filepath: str | None = None) -> str:
+        """
+        Generate a SLURM-safe job name.
+
+        Uses NAMETAG annotation if present, otherwise the filename stem.
+        Sanitised to ``[a-zA-Z0-9_\\-.[\\]]`` and truncated to 60 chars.
+        """
+        if filepath is None:
+            filepath = self.path or "unnamed"
+        stem = os.path.splitext(os.path.basename(filepath))[0]
+        if self.nametag:
+            name = f"{stem}_{self.nametag.strip()}"
+        else:
+            name = stem
+        name = re.sub(r"[^a-zA-Z0-9_\-.\[\]]", "_", name)
+        return name[:60]
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+    def to_string(self) -> str:
+        """Reconstruct the full input file text from the parsed data."""
+        parts: list[str] = []
+
+        # Global annotation lines
+        if self.annotate_lines:
+            parts.append("\n".join(self.annotate_lines))
+            # Don't add extra newline - step text will have its own leading content
+
+        step_strings = [s.to_string() for s in self.steps]
+
+        if parts:
+            # Annotations + first step: ensure single newline separator
+            parts.append("\n" + step_strings[0])
+        else:
+            parts.append(step_strings[0])
+
+        for s_str in step_strings[1:]:
+            parts.append("\n--Link1--\n" + s_str)
+
+        return "".join(parts)
+
+    def save(self, filepath: str | None = None):
+        """
+        Write the (possibly modified) input file to disk.
+
+        Args:
+            filepath:  Destination path.  Defaults to the original path.
+        """
+        if filepath is None:
+            filepath = self.path
+        if filepath is None:
+            raise ValueError("No file path specified for save().")
+        with open(filepath, "w", encoding="utf-8", newline="\n") as f:
+            f.write(self.to_string())
 
 
-class Gaussian_input_step:
-    def __init__(self, input_list: list):  # input 为SplitStep内的一个Step
+# Backward-compatible alias
+Gaussian_input = Gaussian_Input
 
-        self.charge = 999
-        self.multiplet = 999
-        self.proc = 1
-        self.mem = 0.1
-        self.chk = ""
-        self.rwf = ""
+
+class Gaussian_Input_Step:
+    """
+    One step of a Gaussian input file (separated by ``--Link1--``).
+
+    Stores both structured data and raw text so the file can be faithfully
+    reconstructed after modification.
+
+    Attributes (link0 commands — directly settable):
+        proc (int):        ``%nprocshared`` value.
+        mem_mb (int):      ``%mem`` value in MB (0 if unset).
+        mem (float):       ``%mem`` value in GB (legacy, kept for compat).
+        chk (str):         ``%chk`` path (case-preserved).
+        oldchk (str):      ``%oldchk`` path.
+        rwf (str):         ``%rwf`` path.
+        nosave (bool):     Whether ``%nosave`` is present.
+        extra_link0 (list[str]):  Other link0 lines we don't parse
+                                   specially (e.g. ``%subst``).
+
+    Attributes (route / body — from original parsing):
+        route_str (str):            Raw route text.
+        route_dict (Route_dict):    Parsed route.
+        title (list[str]):          Title paragraph lines.
+        charge (int):               Molecular charge.
+        multiplet (int):            Spin multiplicity.
+        geom (list):                Geometry lines (std_coordinate objects).
+        geom_raw (list[str]):       Geometry lines as raw text (for reconstruction).
+        other (list[list[str]]):    Remaining paragraphs (basis, ECP, …).
+        annotate_lines (list[str]): Step-level annotation lines.
+        annotates_dict (dict):      Step-level annotations.
+        command_lines (list[str]):  ``!RUN`` commands in this step.
+        is_allcheck (bool):         True if ``geom=allcheck``.
+    """
+
+    def __init__(self, raw_text_or_list):
+        """
+        Args:
+            raw_text_or_list:  Either a string of the step's text (for the new
+                               ``Gaussian_Input`` path) or a list of already-
+                               stripped lines (legacy ``Gaussian_input`` path).
+        """
+        if isinstance(raw_text_or_list, str):
+            # New path: store raw text, derive line list
+            self._raw_text = raw_text_or_list
+            input_list = [x.strip() for x in raw_text_or_list.splitlines()]
+            # Remove leading/trailing blank lines that are splitting artefacts
+            while input_list and not input_list[0].strip():
+                input_list.pop(0)
+        else:
+            input_list = list(raw_text_or_list)
+            self._raw_text = "\n".join(input_list)
+
+        self.charge: int = 999
+        self.multiplet: int = 999
+        self.proc: int = 1
+        self.mem: float = 0.1
+        self.mem_mb: int = 0
+        self.chk: str = ""
+        self.oldchk: str = ""
+        self.rwf: str = ""
+        self.nosave: bool = False
+        self.extra_link0: list[str] = []
 
         self.input_list = input_list
 
-        self.phrase_annotates()
+        self._phrase_annotates()
 
-        # devide paragraphs
-        self.paragraphs = []
-
-        temp = []
+        # --- divide paragraphs ----
+        self.paragraphs: list[list[str]] = []
+        temp: list[str] = []
         for line in self.input_list:
-            if line.strip():  # 如果不是空行
+            if line.strip():
                 temp.append(line)
             else:
                 self.paragraphs.append(temp)
@@ -47,58 +292,79 @@ class Gaussian_input_step:
         if temp:
             self.paragraphs.append(temp)
 
-        # 此时已分成独立的paragraphs
-
-        # read link0 command
-        self.link0_list = []
+        # --- read link0 commands  ----
+        self.link0_list: list[str] = []
         link0_line_count = 0
         for i, line in enumerate(self.paragraphs[0]):
-            line = line.lower()
-            if line.strip(" ").startswith("%"):
-                self.link0_list.append(line)
+            line_lower = line.lower().strip()
+            if line_lower.startswith("%"):
+                self.link0_list.append(line)  # preserve original case
 
-                if "%nprocshared=" in line:
-                    self.proc = int(re.findall(r"%nprocshared=(.+)", line)[0].strip())
-                elif "%mem=" in line and 'mb' in line:
-                    self.mem = int(float((re.findall(r"%mem=(.+)mb", line)[0].strip())) / 100) / 10
-                elif "%chk=" in line:
-                    self.chk = re.findall(r"%chk=(.+)", line)[0].strip()
-                elif "%rwf=" in line:
-                    self.rwf = re.findall(r"%rwf=(.+)", line)[0].strip()
-
+                if "%nprocshared=" in line_lower:
+                    self.proc = int(re.findall(r"(?i)%nprocshared=(.+)", line)[0].strip())
+                elif "%mem=" in line_lower and 'mb' in line_lower:
+                    mem_val = float(re.findall(r"(?i)%mem=(.+?)mb", line)[0].strip())
+                    self.mem_mb = int(mem_val)
+                    self.mem = int(mem_val / 100) / 10
+                elif "%mem=" in line_lower and 'gb' in line_lower:
+                    mem_val = float(re.findall(r"(?i)%mem=(.+?)gb", line)[0].strip())
+                    self.mem_mb = int(mem_val * 1024)
+                    self.mem = mem_val
+                elif "%chk=" in line_lower:
+                    self.chk = re.findall(r"(?i)%chk=(.+)", line)[0].strip()
+                elif "%oldchk=" in line_lower:
+                    self.oldchk = re.findall(r"(?i)%oldchk=(.+)", line)[0].strip()
+                elif "%rwf=" in line_lower:
+                    self.rwf = re.findall(r"(?i)%rwf=(.+)", line)[0].strip()
+                elif "%nosave" in line_lower:
+                    self.nosave = True
+                else:
+                    self.extra_link0.append(line)
             else:
                 link0_line_count = i
                 break
 
-        self.saved = [0, 1, 2]  # 记录访问了多少paragraph，访问当前第一个paragraph使用len
+        self.saved = [0, 1, 2]
 
-        self.route_list = self.paragraphs[0][link0_line_count:]  # 除了Link0命令外，为route部分
-        self.route_str = self.join(self.route_list)
+        # --- route section ----
+        self.route_list = self.paragraphs[0][link0_line_count:]
+        self.route_str = self._join(self.route_list)
         self.route_dict = Route_dict(self.route_str)
+
+        self.connectivity: list[str] | None = None
         if 'connectivity' in self.route_str:
             self.connectivity = self.paragraphs.pop(3)
 
-        if not self.route_dict.from_gaussview and 'allcheck' in safe_get_dict_value(self.route_dict, 'geom'):
-            self.title = []
-            self.geom = []
-            self.other = self.paragraphs[1:]
+        # --- detect allcheck ----
+        self.is_allcheck = (
+            not self.route_dict.from_gaussview
+            and 'allcheck' in safe_get_dict_value(self.route_dict, 'geom')
+        )
 
+        if self.is_allcheck:
+            self.title: list[str] = []
+            self.geom: list = []
+            self.geom_raw: list[str] = []
+            self.other: list[list[str]] = self.paragraphs[1:]
         else:
             self.title = self.paragraphs[1]
             if not [x for x in self.title if x.strip()]:
                 self.title = ["Empty Title"]
 
-            self.geom = self.paragraphs[2]
-
+            self.geom_paragraph = self.paragraphs[2]
             self.other = self.paragraphs[3:]
 
-            # extract charge and multiplet
-            self.charge_and_multiplet = [x for x in self.geom[0].split() if x != '']
+            # charge and multiplicity
+            self.charge_and_multiplet = [x for x in self.geom_paragraph[0].split() if x != '']
             self.charge = int(self.charge_and_multiplet[0])
             self.multiplet = int(self.charge_and_multiplet[1])
 
-            # delete LP, charge & multiplet
-            self.geom = [x for x in self.geom[1:] if not x.lower().strip().startswith('lp')]
+            # geometry lines (without LP and charge line)
+            self.geom_raw = [
+                x for x in self.geom_paragraph[1:]
+                if not x.lower().strip().startswith('lp')
+            ]
+            self.geom = [std_coordinate(x) for x in self.geom_raw]
 
         self.other_str = ""
         for paragraph in self.other:
@@ -106,49 +372,188 @@ class Gaussian_input_step:
                 self.other_str += line + '\n'
             self.other_str += '\n'
 
-        self.route_dict = Route_dict(self.route_str, self.other_str)  # 重新产生一个Route_dict 把其他段落包括进去
+        self.route_dict = Route_dict(self.route_str, self.other_str)
 
-        self.geom = [std_coordinate(x) for x in self.geom]
-        self.coordinate = Coordinates(self.geom, charge=self.charge, multiplet=self.multiplet)
-        self.geom_text = self.join(self.geom)
+        self.coordinate = Coordinates(self.geom, charge=self.charge, multiplet=self.multiplet) if self.geom else None
+        self.geom_text = self._join(self.geom) if self.geom else ""
 
-    def phrase_annotates(self):
-        # phrase annotate setting like "!__NAMETAG__=Orbital_Energy"
-        self.annotate_lines = []
+    # ------------------------------------------------------------------
+    # Annotation parsing (kept from original, slightly renamed)
+    # ------------------------------------------------------------------
+    def _phrase_annotates(self):
+        self.annotate_lines: list[str] = []
         for line in self.input_list:
             if line.startswith('!'):
                 self.annotate_lines.append(line)
         for line in self.annotate_lines:
-            self.input_list.remove(line)
+            if line in self.input_list:
+                self.input_list.remove(line)
 
-        self.command_lines = []  # a preset of RUN command can be issued and will be phrased by qsubg09.py
+        self.command_lines: list[str] = []
         for line in self.annotate_lines:
-            # "!__NAMETAG__=Orbital_Energy"
-            re_ret = re.findall(r'!RUN (.+)', line)
-            if re_ret:
+            m = re.findall(r'!RUN (.+)', line)
+            if m:
                 self.command_lines.append(line)
 
         for line in self.command_lines:
             if line in self.input_list:
                 self.input_list.remove(line)
 
-        self.annotates_dict = {}
+        self.annotates_dict: dict[str, str] = {}
         for line in self.annotate_lines:
-            # "!__NAMETAG__=Orbital_Energy"
-            re_ret = re.findall(r'!__(.+?)__=(.+)', line)
-            if re_ret:
-                re_ret = re_ret[0]
-                self.annotates_dict[re_ret[0]] = re_ret[1]
+            m = re.findall(r'!__(.+?)__=(.+)', line)
+            if m:
+                self.annotates_dict[m[0][0]] = m[0][1]
 
-    def join(self, item):
+    # ------------------------------------------------------------------
+    # Modification methods
+    # ------------------------------------------------------------------
+    def set_nprocshared(self, value: int):
+        """Set ``%nprocshared``."""
+        self.proc = value
+
+    def set_mem(self, mem_mb: int):
+        """Set ``%mem`` in MB."""
+        self.mem_mb = mem_mb
+        self.mem = round(mem_mb / 1024, 2)
+
+    def set_chk(self, chk_path: str):
+        """Set ``%chk``."""
+        self.chk = chk_path
+
+    def set_oldchk(self, oldchk_path: str):
+        """Set ``%oldchk``."""
+        self.oldchk = oldchk_path
+
+    def set_rwf(self, rwf_path: str):
+        """Set ``%rwf``."""
+        self.rwf = rwf_path
+
+    def add_route_keyword(self, keyword: str, options: list[str] | str | None = None):
+        """
+        Add a keyword (and optional options) to the route section.
+
+        Examples::
+
+            step.add_route_keyword("freq")
+            step.add_route_keyword("opt", ["calcfc", "ts"])
+            step.add_route_keyword("scrf", "smd")
+        """
+        if options is None:
+            options = []
+        elif isinstance(options, str):
+            options = [options]
+        self.route_dict.add_item(keyword, options)
+
+    def remove_route_keyword(self, keyword: str, options: list[str] | str | None = None):
+        """
+        Remove a keyword or specific options from the route section.
+
+        If *options* is None, the entire keyword is removed.
+        Otherwise only the listed options are removed (keyword kept if other
+        options remain).
+
+        Examples::
+
+            step.remove_route_keyword("freq")               # remove entirely
+            step.remove_route_keyword("opt", "calcfc")       # remove one option
+            step.remove_route_keyword("opt", ["calcfc","ts"]) # remove two options
+        """
+        if options is None:
+            self.route_dict.remove_key(keyword)
+        else:
+            if isinstance(options, str):
+                options = [options]
+            self.route_dict.remove_item(keyword, options)
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+    def _build_link0_lines(self) -> list[str]:
+        """Reconstruct link0 command lines from current attribute values."""
+        lines: list[str] = []
+        if self.proc and self.proc > 0:
+            lines.append(f"%nprocshared={self.proc}")
+        if self.mem_mb and self.mem_mb > 0:
+            lines.append(f"%mem={self.mem_mb}MB")
+        if self.rwf:
+            lines.append(f"%rwf={self.rwf}")
+        if self.nosave:
+            lines.append("%nosave")
+        if self.oldchk:
+            lines.append(f"%oldchk={self.oldchk}")
+        if self.chk:
+            lines.append(f"%chk={self.chk}")
+        for extra in self.extra_link0:
+            lines.append(extra)
+        return lines
+
+    def to_string(self) -> str:
+        """Reconstruct this step's text from the parsed/modified data."""
+        parts: list[str] = []
+
+        # Annotation lines for this step
+        for line in self.annotate_lines:
+            parts.append(line)
+
+        # Link0
+        parts.extend(self._build_link0_lines())
+
+        # Route (use route_dict's __str__ which reconstructs the route)
+        route_body = str(self.route_dict).strip()
+        parts.append(f"#p")
+        if route_body:
+            # Route_dict __str__ already produces each keyword on its own line
+            parts.append(route_body)
+
+        if self.is_allcheck:
+            # allcheck steps: just the "other" paragraphs follow, separated
+            # by blank lines after the route section.
+            parts.append("")  # blank line after route
+            for paragraph in self.other:
+                for line in paragraph:
+                    parts.append(line)
+                parts.append("")  # blank between paragraphs
+        else:
+            # Normal step with title + geometry + other
+            parts.append("")  # blank line after route
+            for line in self.title:
+                parts.append(line)
+            parts.append("")  # blank after title
+            parts.append(f"{self.charge} {self.multiplet}")
+            for line in self.geom_raw:
+                parts.append(line)
+            parts.append("")  # blank after geometry
+            for paragraph in self.other:
+                for line in paragraph:
+                    parts.append(line)
+                parts.append("")  # blank between paragraphs
+
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Utilities (kept from original)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _join(item) -> str:
         ret = ""
         for i in item:
             if not isinstance(i, str):
                 return repr(item)
             ret += i.strip() + '\n'
+        return ret.strip()
 
-        ret = ret.strip()
-        return ret
+    # Legacy alias
+    def join(self, item):
+        return self._join(item)
+
+    # Legacy alias
+    def phrase_annotates(self):
+        return self._phrase_annotates()
+
+
+# Backward-compatible alias
+Gaussian_input_step = Gaussian_Input_Step
 
 
 class Keyword:
@@ -1599,6 +2004,7 @@ def print_link_List(data=None, running=False, modify_time=datetime.now()):
 
     returnStr += '\n'
     return (returnStr)
+
 
 if __name__ == '__main__':
     pass
