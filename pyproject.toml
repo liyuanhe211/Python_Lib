@@ -5,20 +5,36 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "LYH_Python_Lib"
 version = "0.1.0"
-description = "My personal Python library"
+description = "LYH's personal Python library"
 requires-python = ">=3.9"
 dependencies = [
-    "google-genai>=1.47.0",
-    "keyboard>=0.13.5",
-    "pypdf>=6.7.3",
-    "pyperclip>=1.11.0",
-    "PyQt6<=6.9.1",
-    "pywin32>=311",
+	"FlagEmbedding==1.3.5",
+	"chromadb>=0.5.23",
+	"colour-science>=0.4.6",
+	"datasets==3.2.0",
+	"fsspec==2024.9.0",
+	"google-genai>=1.47.0",
+	"jieba>=0.42.1",
+	"keyboard>=0.13.5",
+	"markitdown>=0.1.1",
+	"peft>=0.5.0",
+	"pypdf>=6.7.3",
+	"pyperclip>=1.11.0",
+	"PyQt6<=6.9.1",
+	"pyarrow<=20.0.0",
+	"rank-bm25>=0.2.2",
+	"sentence-transformers>=2.6.0",
+	"transformers==4.46.3",
+	"pywin32>=311; sys_platform == 'win32'",
+	"send2trash",
 ]
+
+# Indexing / retrieval quality install command:
+# uv pip install torch chromadb jieba rank-bm25 sentence-transformers "transformers==4.46.3" "pyarrow<=20.0.0" datasets==3.2.0 fsspec==2024.9.0 peft FlagEmbedding==1.3.5
 
 [tool.setuptools]
 # 1. Define the package name explicitly as "Python_Lib"
-packages = ["Python_Lib", "LLM_Lib", "Chem_Lib"，"Machine_Learning_Lib"]
+packages = ["Python_Lib", "LLM_Lib", "Chem_Lib", "Machine_Learning_Lib", "HPC_Lib"]
 # 2. Enable inclusion of non-code files (like .txt or .dll)
 include-package-data = true
 
@@ -29,6 +45,7 @@ Python_Lib = "src/Python_Lib"
 Machine_Learning_Lib = "src/Machine_Learning_Lib"
 Chem_Lib = "src/Chem_Lib"
 LLM_Lib = "src/LLM_Lib"
+HPC_Lib = "src/HPC_Lib"
 
 [tool.setuptools.package-data]
 # If you have non-python files (dlls, txts) in the root, include them here:
