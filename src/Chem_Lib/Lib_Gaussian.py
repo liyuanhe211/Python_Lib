@@ -138,6 +138,135 @@ class Gaussian_Input:
         for i in self._resolve_steps(step):
             self.steps[i].remove_route_keyword(keyword, options)
 
+    def set_route_keyword(self, step, keyword: str, options: list[str] | str | None = None):
+        """Replace (set) the options of a keyword for the given step(s).
+
+        If the keyword already exists, its options are overwritten (not merged
+        as :meth:`add_route_keyword` would).  If absent, it is added.
+        Pass ``options=None`` or ``[]`` to keep the keyword present without
+        options (e.g. ``freq`` alone).
+        """
+        for i in self._resolve_steps(step):
+            self.steps[i].set_route_keyword(keyword, options)
+
+    def set_route_dict(self, step, route_mapping: dict):
+        """Replace the entire route section for the given step(s) with a dict.
+
+        Example::
+
+            gi.set_route_dict(0, {
+                "level": ["b3lyp", "6-31g(d)"],
+                "opt":   ["calcfc", "ts"],
+                "freq":  [],
+            })
+        """
+        for i in self._resolve_steps(step):
+            self.steps[i].set_route_dict(route_mapping)
+
+    def set_geometry(self, step, geometry, *, charge: int | None = None, multiplet: int | None = None):
+        """Replace the geometry of the given step(s).
+
+        Args:
+            geometry:   One of:
+                        * a :class:`Coordinates` object,
+                        * a list of raw coordinate lines (strings), or
+                        * a list of :class:`std_coordinate` objects.
+            charge:     Optional new charge (kept if None).
+            multiplet:  Optional new multiplicity (kept if None).
+        """
+        for i in self._resolve_steps(step):
+            self.steps[i].set_geometry(geometry, charge=charge, multiplet=multiplet)
+
+    def extract_steps(self, indices) -> "Gaussian_Input":
+        """Return a **new** :class:`Gaussian_Input` containing only the selected steps.
+
+        Args:
+            indices: An int, a list/tuple of ints, a slice, or "ALL".
+                     Indices may be negative (Python-style).
+
+        The returned object shares no mutable state with *self* (deep copy).
+        """
+        if isinstance(indices, str) and indices.upper() == "ALL":
+            picked = list(range(self.step_count))
+        elif isinstance(indices, slice):
+            picked = list(range(*indices.indices(self.step_count)))
+        elif isinstance(indices, int):
+            picked = [indices]
+        else:
+            picked = list(indices)
+
+        picked = [i if i >= 0 else self.step_count + i for i in picked]
+        for i in picked:
+            if i < 0 or i >= self.step_count:
+                raise IndexError(f"Step {i} out of range (0..{self.step_count - 1})")
+
+        new_obj = Gaussian_Input.__new__(Gaussian_Input)
+        new_obj.path = self.path
+        new_obj.annotate_lines = list(self.annotate_lines)
+        new_obj.annotates_dict = dict(self.annotates_dict)
+        new_obj.run_commands = list(self.run_commands)
+        new_obj.steps = [Gaussian_Input_Step(self.steps[i].to_string()) for i in picked]
+        new_obj.step_count = len(new_obj.steps)
+        return new_obj
+
+    @classmethod
+    def from_scratch(cls, steps: list[dict], *, annotates: dict | None = None,
+                     run_commands: list[str] | None = None) -> "Gaussian_Input":
+        """Build a new :class:`Gaussian_Input` from a pure-Python spec.
+
+        Each entry in *steps* is a dict describing one step.  Supported keys::
+
+            {
+                # link0 (all optional)
+                "nprocshared": 16,           # or "proc"
+                "mem_mb":      32768,        # or "mem" in GB (float)
+                "chk":         "job.chk",
+                "oldchk":      "prev.chk",
+                "rwf":         "job.rwf",
+                "nosave":      True,
+                "extra_link0": ["%subst ..."],
+
+                # route (either of these — "route_dict" wins if both given)
+                "route_dict":  {"level": ["b3lyp", "6-31g(d)"], "opt": [], ...},
+                "route_str":   "#p b3lyp/6-31g(d) opt",
+
+                # molecule (skipped if geom=allcheck)
+                "title":       "My Job",          # or list[str]
+                "charge":      0,
+                "multiplet":   1,
+                "geometry":    Coordinates | list[str] | list[std_coordinate],
+
+                # trailing paragraphs (basis, ECP, modredundant, ...)
+                "other":       [["line1", "line2"], ["para2 line1"]],
+
+                # step-level annotations / !RUN
+                "annotates":   {"TAG": "value"},
+                "commands":    ["echo hello"],
+            }
+
+        Args:
+            steps:         List of step-spec dicts (must be non-empty).
+            annotates:     Global ``!__KEY__=VALUE`` annotations for the file.
+            run_commands:  Global ``!RUN ...`` commands for the file.
+        """
+        if not steps:
+            raise ValueError("steps must not be empty")
+
+        obj = cls.__new__(cls)
+        obj.path = None
+        obj.annotate_lines = []
+        obj.annotates_dict = dict(annotates or {})
+        obj.run_commands = list(run_commands or [])
+
+        for k, v in obj.annotates_dict.items():
+            obj.annotate_lines.append(f"!__{k}__={v}")
+        for cmd in obj.run_commands:
+            obj.annotate_lines.append(f"!RUN {cmd}")
+
+        obj.steps = [Gaussian_Input_Step.from_spec(spec) for spec in steps]
+        obj.step_count = len(obj.steps)
+        return obj
+
     # ------------------------------------------------------------------
     # Aggregate info accessors
     # ------------------------------------------------------------------
@@ -465,6 +594,178 @@ class Gaussian_Input_Step:
             if isinstance(options, str):
                 options = [options]
             self.route_dict.remove_item(keyword, options)
+
+    def set_route_keyword(self, keyword: str, options: list[str] | str | None = None):
+        """Replace (not merge) the options for *keyword* in the route section.
+
+        Examples::
+
+            step.set_route_keyword("opt", ["ts", "calcfc"])  # overwrite
+            step.set_route_keyword("freq")                    # keyword-only
+            step.set_route_keyword("scrf", "smd")             # single option
+        """
+        keyword = keyword.strip().lower()
+        if not keyword:
+            return
+        if options is None:
+            options = []
+        elif isinstance(options, str):
+            options = [options]
+        self.route_dict[keyword] = list(options)
+
+    def set_route_dict(self, route_mapping: dict):
+        """Replace the entire route section using an ordinary dict.
+
+        The ``level`` entry (method/basis) is preserved from *route_mapping* if
+        present; otherwise the current method/basis is kept.  All other route
+        keywords are overwritten.
+        """
+        preserved_level = self.route_dict.get("level", ["Blank_Method", "Black_Basis"])
+        new_route = Route_dict("", remove_genchk=False)
+        new_route.clear()
+        new_route["level"] = route_mapping.get("level", preserved_level)
+        for k, v in route_mapping.items():
+            if k == "level":
+                continue
+            if v is None:
+                v = []
+            elif isinstance(v, str):
+                v = [v]
+            else:
+                v = list(v)
+            new_route[k.strip().lower()] = v
+        new_route.other_paragraph = self.route_dict.other_paragraph
+        self.route_dict = new_route
+
+    def set_geometry(self, geometry, *, charge: int | None = None, multiplet: int | None = None):
+        """Replace the geometry (atomic coordinates) of this step.
+
+        Args:
+            geometry: Accepts:
+                      * a :class:`Coordinates` object — charge/multiplet
+                        are taken from it if not given explicitly,
+                      * a list of raw coordinate-line strings (e.g.
+                        ``"C   0.0  0.0  0.0"``),
+                      * a list of :class:`std_coordinate` objects.
+            charge, multiplet:  Override the current values (kept if None).
+        """
+        if isinstance(geometry, Coordinates):
+            coords_obj = geometry
+            std_list = list(getattr(coords_obj, "coordinates", []))
+            raw_lines = [str(c) for c in std_list]
+            if charge is None and getattr(coords_obj, "charge", 999) != 999:
+                charge = int(coords_obj.charge)
+            mult_attr = getattr(coords_obj, "multiplet", getattr(coords_obj, "multiplicity", 999))
+            if multiplet is None and mult_attr != 999:
+                multiplet = int(mult_attr)
+        elif isinstance(geometry, list):
+            if geometry and isinstance(geometry[0], str):
+                raw_lines = [line.rstrip("\n") for line in geometry]
+                std_list = [std_coordinate(line) for line in raw_lines]
+            else:
+                std_list = list(geometry)
+                raw_lines = [str(c) for c in std_list]
+        else:
+            raise TypeError(f"Unsupported geometry type: {type(geometry).__name__}")
+
+        if charge is not None:
+            self.charge = int(charge)
+        if multiplet is not None:
+            self.multiplet = int(multiplet)
+
+        self.geom_raw = raw_lines
+        self.geom = std_list
+        self.coordinate = Coordinates(self.geom, charge=self.charge, multiplet=self.multiplet) if self.geom else None
+        self.geom_text = self._join(self.geom) if self.geom else ""
+        self.is_allcheck = False
+        if "geom" in self.route_dict and "allcheck" in self.route_dict["geom"]:
+            self.route_dict["geom"].remove("allcheck")
+            if not self.route_dict["geom"]:
+                self.route_dict.pop("geom")
+
+    @classmethod
+    def from_spec(cls, spec: dict) -> "Gaussian_Input_Step":
+        """Build a step from a dict spec (see :meth:`Gaussian_Input.from_scratch`)."""
+        step = cls.__new__(cls)
+        step.input_list = []
+        step._raw_text = ""
+
+        step.proc = int(spec.get("nprocshared", spec.get("proc", 1)))
+        if "mem_mb" in spec:
+            step.mem_mb = int(spec["mem_mb"])
+            step.mem = round(step.mem_mb / 1024, 2)
+        elif "mem" in spec:
+            step.mem = float(spec["mem"])
+            step.mem_mb = int(step.mem * 1024)
+        else:
+            step.mem_mb = 0
+            step.mem = 0.1
+        step.chk = str(spec.get("chk", ""))
+        step.oldchk = str(spec.get("oldchk", ""))
+        step.rwf = str(spec.get("rwf", ""))
+        step.nosave = bool(spec.get("nosave", False))
+        step.extra_link0 = list(spec.get("extra_link0", []))
+
+        if "route_dict" in spec and spec["route_dict"] is not None:
+            rd_in = spec["route_dict"]
+            step.route_dict = Route_dict("", remove_genchk=False)
+            step.route_dict.clear()
+            step.route_dict["level"] = list(rd_in.get("level", ["Blank_Method", "Black_Basis"]))
+            for k, v in rd_in.items():
+                if k == "level":
+                    continue
+                if v is None:
+                    v = []
+                elif isinstance(v, str):
+                    v = [v]
+                else:
+                    v = list(v)
+                step.route_dict[k.strip().lower()] = v
+            step.route_str = str(step.route_dict)
+        else:
+            step.route_str = spec.get("route_str", "")
+            step.route_dict = Route_dict(step.route_str)
+
+        # Title
+        title = spec.get("title", "")
+        if isinstance(title, str):
+            step.title = [title] if title else ["Empty Title"]
+        else:
+            step.title = list(title) if title else ["Empty Title"]
+
+        step.charge = int(spec.get("charge", 0))
+        step.multiplet = int(spec.get("multiplet", 1))
+
+        # Geometry
+        geometry = spec.get("geometry")
+        step.geom_raw = []
+        step.geom = []
+        step.coordinate = None
+        step.geom_text = ""
+        step.is_allcheck = bool("geom" in step.route_dict and "allcheck" in step.route_dict["geom"])
+        if geometry is not None:
+            step.set_geometry(geometry)
+
+        # Other paragraphs
+        step.other = [list(p) for p in spec.get("other", [])]
+        step.other_str = ""
+        for paragraph in step.other:
+            for line in paragraph:
+                step.other_str += line + "\n"
+            step.other_str += "\n"
+
+        step.connectivity = None
+
+        # Step-level annotations / run commands
+        step.annotate_lines = []
+        step.annotates_dict = dict(spec.get("annotates", {}))
+        for k, v in step.annotates_dict.items():
+            step.annotate_lines.append(f"!__{k}__={v}")
+        step.command_lines = [f"!RUN {c}" for c in spec.get("commands", [])]
+        step.annotate_lines.extend(step.command_lines)
+
+        step.saved = [0, 1, 2]
+        return step
 
     # ------------------------------------------------------------------
     # Serialisation
