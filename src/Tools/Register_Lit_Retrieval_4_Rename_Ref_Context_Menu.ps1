@@ -1,16 +1,16 @@
-# Register_Rename_Ref_Context_Menu.ps1
+# Register_Lit_Retrieval_4_Rename_Ref_Context_Menu.ps1
 # Run as Administrator to register the "Rename Ref" context-menu entry
 # for .pdf, .epub, and .djvu files.
 #
 # Usage:
-#   .\Register_Rename_Ref_Context_Menu.ps1            # register
-#   .\Register_Rename_Ref_Context_Menu.ps1 -Unregister # remove
+#   .\Register_Lit_Retrieval_4_Rename_Ref_Context_Menu.ps1            # register
+#   .\Register_Lit_Retrieval_4_Rename_Ref_Context_Menu.ps1 -Unregister # remove
 
 param(
     [switch]$Unregister
 )
 
-$launcherScript = Join-Path $PSScriptRoot "Rename_Ref_Context_Menu.ps1"
+$launcherScript = Join-Path $PSScriptRoot "Lit_Retrieval_4_Rename_Ref_Context_Menu.ps1"
 $menuLabel      = "LYH Rename Ref"
 $verbName       = "RenameRef"
 

@@ -1,4 +1,4 @@
-# Rename_Ref_Context_Menu.ps1
+# Lit_Retrieval_4_Rename_Ref_Context_Menu.ps1
 # Called by Windows Explorer context menu — once per selected file.
 # Uses atomic file-creation lock + stability check to batch all
 # selections into a single Python invocation in one PowerShell window.
@@ -8,7 +8,7 @@ param(
     [string]$FilePath
 )
 
-$projectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$projectDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $queueFile  = Join-Path $env:TEMP "rename_ref_queue.txt"
 $lockFile   = Join-Path $env:TEMP "rename_ref_leader.lock"
 
@@ -68,7 +68,7 @@ try {
     # Pass the file list via --from-file to avoid all quoting/escaping issues
     # with paths that contain spaces.
     $pythonExe = Join-Path $projectDir ".venv\Scripts\python.exe"
-    $scriptPy  = Join-Path $projectDir "src\LLM_Lib\Skills\Rename_Ref.py"
+    $scriptPy  = Join-Path $projectDir "src\Tools\Lit_Retrieval_4_Rename_Ref.py"
     $cmd = @"
 & '$pythonExe' '$scriptPy' --from-file '$batchFile'
 Write-Host ''
