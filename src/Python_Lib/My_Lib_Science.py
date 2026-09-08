@@ -1,12 +1,7 @@
 # -*- coding: utf-8 -*-
 __author__ = 'LiYuanhe'
 
-import pathlib
-import sys
-
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
+from Python_Lib.My_Lib_Stock import *
 from scipy.interpolate import interp1d, splrep, splev
 from scipy.integrate import odeint
 from statistics import mean
@@ -163,6 +158,56 @@ def trimmed_mean(data:Sequence[float], remove = 0.1):
     data = data[trim_count:-trim_count]
     return average(data)
 
+
+
+def gaussian_broadening(X, Y, sigma):
+    """
+    Perform Gaussian broadening on discrete data (X, Y).
+
+    Parameters
+    ----------
+    X : 1D array-like
+        Grid of x-values (must be uniformly spaced).
+    Y : 1D array-like
+        Function values corresponding to X.
+    sigma : float
+        Standard deviation of the Gaussian broadening (in same X units).
+
+    Returns
+    -------
+    Y_broadened : np.ndarray
+        The broadened Y values (same shape as input Y).
+    """
+
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+
+    # Ensure X spacing is uniform
+    dx = np.mean(np.diff(X))
+    if not np.allclose(np.diff(X), dx, rtol=1e-4):
+        raise ValueError("X must be uniformly spaced for Gaussian convolution.")
+
+    need_reverse = False
+
+    if dx<0:
+        need_reverse = True
+        X = X[::-1]
+        Y = Y[::-1]
+        dx = np.mean(np.diff(X))
+
+    # Build normalized Gaussian kernel
+    kernel_half_width = int(5 * sigma / dx)  # ±5σ for good accuracy
+    x_kernel = np.arange(-kernel_half_width, kernel_half_width + 1) * dx
+    gaussian = np.exp(-0.5 * (x_kernel / sigma) ** 2)
+    gaussian /= np.sum(gaussian)  # normalize so area = 1
+
+    # Convolve with FFT for speed and accurate edges
+    Y_broadened = fftconvolve(Y, gaussian, mode='same')
+
+    if need_reverse:
+        Y_broadened = Y_broadened[::-1]
+
+    return Y_broadened
 
 if __name__ == '__main__':
     pass
