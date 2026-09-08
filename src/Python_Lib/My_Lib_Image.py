@@ -3,11 +3,7 @@ __author__ = 'LiYuanhe'
 
 import subprocess
 
-import sys
-import pathlib
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
+from Python_Lib.My_Lib_Stock import *
 
 
 def get_image_size(image_file):

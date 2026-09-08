@@ -4,20 +4,14 @@
 
 __author__ = 'LiYuanhe'
 
-import sys
-
-import pathlib
-
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
-from My_Lib_Color import *
-from My_Lib_Image import *
-from My_Lib_Network import *
-from My_Lib_Office import *
-from My_Lib_Science import *
-from My_Lib_System import *
-from My_Lib_Video import *
+from Python_Lib.My_Lib_Stock import *
+from Python_Lib.My_Lib_Color import *
+from Python_Lib.My_Lib_Image import *
+from Python_Lib.My_Lib_Network import *
+from Python_Lib.My_Lib_Office import *
+from Python_Lib.My_Lib_Science import *
+from Python_Lib.My_Lib_System import *
+from Python_Lib.My_Lib_Video import *
 
 if __name__ == "__main__":
     pass
