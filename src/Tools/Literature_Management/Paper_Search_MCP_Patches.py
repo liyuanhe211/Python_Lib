@@ -53,7 +53,7 @@ OPENALEX_KEY_PATCH_CODE = '''
 
 # ── 本地补丁：OpenAlex API key 支持 ──────────────────────────────────────────
 # OpenAlex 自 2026-02-13 起要求 API key（免费申请），上游没有相关代码。
-# 本段由 Python_Lib/src/Tools/Paper_Search_MCP_Patches.py 生成，两种方式注入：
+# 本段由 Python_Lib/src/Tools/Literature_Management/Paper_Search_MCP_Patches.py 生成，两种方式注入：
 #   - 进程内：Paper_Search_MCP_Launcher.py 在拉起 MCP server 前 exec 本段
 #   - 落盘：  追加到本文件末尾，供 paper-search 命令行入口使用
 # 密钥从 ~/.config/paper-search-mcp/.env 读取，不出现在任何源码里。

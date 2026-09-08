@@ -25,7 +25,7 @@ Paper_Search_MCP_Launcher.py —— 带本地补丁的 paper-search MCP server �
       "type": "stdio",
       "command": "uv",
       "args": ["tool", "run", "--from", "paper-search-mcp", "python",
-               "E:/My_Program/Python_Lib/src/Tools/Paper_Search_MCP_Launcher.py"]
+               "E:/My_Program/Python_Lib/src/Tools/Literature_Management/Paper_Search_MCP_Launcher.py"]
     }
 
 `uv tool run` 的额外开销实测约 0.2 秒，可以忽略。

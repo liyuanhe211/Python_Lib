@@ -18,8 +18,8 @@ Paper_Search_MCP_Setup.py —— paper-search-mcp 的配置同步与体检工具
 
 用法::
 
-    python src/Tools/Paper_Search_MCP_Setup.py            # 同步 + 修复 + 验证
-    python src/Tools/Paper_Search_MCP_Setup.py --check    # 只体检，不改任何文件
+    python src/Tools/Literature_Management/Paper_Search_MCP_Setup.py            # 同步 + 修复 + 验证
+    python src/Tools/Literature_Management/Paper_Search_MCP_Setup.py --check    # 只体检，不改任何文件
 
 日常并不需要手动跑这个脚本——`Paper_Search_MCP_Launcher.py` 每次启动 MCP server
 时都会自动做第 2 步。需要手动跑的场合只有两个：**新申请到一个密钥**，或者

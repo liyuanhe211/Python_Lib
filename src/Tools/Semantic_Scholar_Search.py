@@ -409,7 +409,7 @@ def main() -> None:
               "  - ~/.config/paper-search-mcp/.env 的 "
               "PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY\n"
               "  - LLM_API_KEYS_PRIVATE.py 的 Semantic_Scholar_S2_API_KEY\n"
-              "填好之后跑一次 src/Tools/Paper_Search_MCP_Setup.py 同步。",
+              "填好之后跑一次 src/Tools/Literature_Management/Paper_Search_MCP_Setup.py 同步。",
               file=sys.stderr)
         sys.exit(1)
 
