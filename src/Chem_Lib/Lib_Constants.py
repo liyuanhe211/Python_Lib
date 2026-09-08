@@ -2,11 +2,17 @@
 __author__ = 'LiYuanhe'
 import os
 import math
+import platform
 from Python_Lib.My_Lib_Stock import *
 
-TEMP_FOLDER_PATH = get_config(open_config_file(), 'Temp_Path', r"D:\Gaussian\Temp")
-if not os.path.isdir(TEMP_FOLDER_PATH):
-    os.makedirs(TEMP_FOLDER_PATH,exist_ok=True)
+if platform.system() == "Windows":
+    _default_temp_folder_path = r"D:\Gaussian\Temp"
+else:
+    _default_temp_folder_path = os.path.expanduser("~/Gaussian_RWF/Temp")
+
+# 不要在 import 阶段创建这个文件夹（否则任何 import 本模块的程序都会留下副作用），
+# 由真正写临时文件的调用方在使用前 os.makedirs(TEMP_FOLDER_PATH, exist_ok=True)
+TEMP_FOLDER_PATH = get_config(open_config_file(), 'Temp_Path', _default_temp_folder_path)
 
 # ALL Numbers in SI if not mentioned
 R = 8.3144648

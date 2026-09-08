@@ -9,6 +9,12 @@ import numpy as np
 from .Lib_Constants import *
 from .Lib_Chemistry import get_bonds
 
+# Entries that occupy a coordinate line but carry no electrons and no nuclear charge:
+# "Bq" is a Gaussian ghost atom (basis functions only), "X" a dummy centre used for
+# geometry definition, "Tv" a translation vector of a periodic calculation.  They are
+# skipped whenever the electron count matters.
+GHOST_AND_DUMMY_ELEMENTS = ("Bq", "X", "Tv")
+
 
 class Coordinates:
     def __init__(self,
@@ -54,8 +60,15 @@ class Coordinates:
 
         self.coordinates = []  # a list of std_coordinate()
 
+        # File the coordinates were read from, when known. Set here for the
+        # file-path input branch; Gaussian_Input / Gaussian_Output stamp it onto
+        # the Coordinates objects they parse out of their files. Ignored by
+        # __eq__ / __hash__.
+        self.source_path: Optional[str] = None
+
         if isinstance(coordinates, str) and os.path.isfile(coordinates):
             # 可以传一个文件进来，读取最后一个坐标，不过charge和multiplet读不了，需要指定
+            self.source_path = str(coordinates)
             with open(coordinates) as coordinates_file:
                 coordinates_lines = coordinates_file.readlines()
             for count in range(len(coordinates_lines) - 1, -1, -1):
@@ -98,7 +111,7 @@ class Coordinates:
         for vectors in periodic_cell:
             self.periodic_cell.append("\t".join(vectors.split()))
         assert len(self.periodic_cell) <= 3, "PBC condition more than 3-dimensional."
-        assert tuple(set(len(x.split('\t')) for x in self.periodic_cell)) in ((3), ()), "PBC vector not 3-dimensional."  # 要么是三维，要么是0维
+        assert tuple(set(len(x.split('\t')) for x in self.periodic_cell)) in ((3,), ()), "PBC vector not 3-dimensional."  # 要么是三维，要么是0维
 
         self.charge = int(charge)
         self.multiplicity = int(multiplet)
@@ -111,7 +124,7 @@ class Coordinates:
             self.is_fault = False
             self.elements = [coord.split('\t')[0].upper() for coord in self.coordinates]
             self.elements = [(x[0].upper() + x[1:].lower() if not is_int(x) else x) for x in self.elements]
-            self.elements = [(x if (x in element_to_num_dict) or (x in ["Bq","X","Tv"]) else num_to_element_dict[x]) for x in self.elements]
+            self.elements = [(x if (x in element_to_num_dict) or (x in GHOST_AND_DUMMY_ELEMENTS) else num_to_element_dict[x]) for x in self.elements]
             self.coordinates_np = [np.array(coord) for coord in self.coordinates_numer]
 
     @property
@@ -129,20 +142,69 @@ class Coordinates:
     def atom_count(self):
         return len(self.coordinates)
 
-    def check_charge_and_multiplicity_parity(self):
-        # check whether charge and multiplicity is correct
-        if self.charge == 999 or self.multiplicity == 999 or self.multiplicity == 99:
-            return False
-        number_of_electrons = sum(self.elements_num) + self.charge
-        if number_of_electrons % 2 == self.multiplicity % 2:
-            return False
+    def charge_and_multiplicity_problem(self) -> Optional[str]:
+        """Describe why the charge / spin multiplicity pair cannot be right.
 
-        return True
+        Returns None when the pair is usable, otherwise a one-sentence English
+        explanation suitable for an exception message.  Three kinds of problem are
+        reported: an unresolved 999 / 99 placeholder, a multiplicity that is not a
+        positive integer, and a multiplicity whose parity contradicts the electron
+        count (a system with an even number of electrons must have an odd
+        multiplicity and vice versa — a program like Gaussian rejects the input
+        outright).
+
+        Ghost atoms, dummy atoms and translation vectors
+        (:data:`GHOST_AND_DUMMY_ELEMENTS`) contribute no electrons and are skipped.
+        Effective core potentials always replace an even number of core electrons,
+        so they never change the parity examined here and need no special handling.
+        None is also returned when the electron count simply cannot be established —
+        an internal-coordinate (Z-matrix) geometry, or an element symbol outside the
+        periodic table — because that is a limit of this check, not a defect of the
+        charge / multiplicity pair.
+        """
+        if self.charge == 999:
+            return "the molecular charge is still the 999 placeholder, i.e. no charge is known"
+        if self.multiplicity in (99, 999):
+            return (f"the spin multiplicity is still the {self.multiplicity} placeholder, "
+                    f"i.e. no multiplicity is known")
+        if self.multiplicity < 1:
+            return f"the spin multiplicity {self.multiplicity} is not a positive integer"
+
+        if self.is_fault:
+            return None  # internal coordinates: the element list was never built
+        countable_elements = [element for element in self.elements
+                              if element not in GHOST_AND_DUMMY_ELEMENTS]
+        if any(element not in element_to_num_dict for element in countable_elements):
+            return None  # an unknown symbol makes the electron count unavailable
+
+        number_of_electrons = sum(element_to_num_dict[element]
+                                  for element in countable_elements) - self.charge
+        unpaired_electrons = self.multiplicity - 1
+        if number_of_electrons % 2 != unpaired_electrons % 2:
+            required_parity = "odd" if number_of_electrons % 2 == 0 else "even"
+            return (f"a system of {number_of_electrons} electrons (charge {self.charge}) "
+                    f"must have an {required_parity} spin multiplicity, "
+                    f"not {self.multiplicity}")
+
+        return None
+
+    def check_charge_and_multiplicity_parity(self) -> bool:
+        """True when the charge and the spin multiplicity are known and mutually consistent.
+
+        A thin boolean wrapper around :meth:`charge_and_multiplicity_problem`; use that
+        method instead when the reason for the rejection is wanted.
+        """
+        return self.charge_and_multiplicity_problem() is None
 
     def __add__(self, other):
         """
         Generate a new object, where new atoms were added,
-        :param other: one str, which should be std_coordinate recognizable, or a list of lines all being recognizable
+        :param other: one str, which should be std_coordinate recognizable, or a list of lines all being recognizable,
+                      or another Coordinates object, whose atoms are appended after this object's atoms.
+                      For Coordinates + Coordinates: charge is the sum of both charges (999 if either is the
+                      999 placeholder); multiplicity requires at least one side to be a singlet and takes the
+                      other side's value (999 if either is the 999 placeholder); adding is refused when either
+                      object has a periodic cell.
         :return: a new Coordinate object
         """
 
@@ -150,19 +212,92 @@ class Coordinates:
             return Coordinates(self.coordinates + [other])
         elif isinstance(other, list):
             return Coordinates(self.coordinates + other)
-        self.update()
+        elif isinstance(other, Coordinates):
+            if self.periodic_cell or other.periodic_cell:
+                raise ValueError("Cannot add two Coordinates objects when either has a periodic cell.")
+
+            if self.charge == 999 or other.charge == 999:
+                charge = 999
+            else:
+                charge = self.charge + other.charge
+
+            if self.multiplicity == 999 or other.multiplicity == 999:
+                multiplicity = 999
+            elif self.multiplicity == 1:
+                multiplicity = other.multiplicity
+            elif other.multiplicity == 1:
+                multiplicity = self.multiplicity
+            else:
+                raise ValueError(f"Cannot add two Coordinates objects with multiplicities "
+                                 f"{self.multiplicity} and {other.multiplicity}: the spin state of the "
+                                 f"combined system is ambiguous unless at least one side is a singlet.")
+
+            return Coordinates(self.coordinates + other.coordinates, charge=charge, multiplet=multiplicity)
+        return NotImplemented
 
     def __sub__(self, other):
         """
-        Generate a new object, where a selected atom is deleted
+        Generate a new object, where a selected atom is deleted.
+        Charge, multiplicity and periodic cell are carried over unchanged — the caller is
+        responsible for adjusting them if the deletion changes the electronic state.
         :param other: an int or an list.  an int, atom index start from 1; or an list of int, multiple atom indexes start from 1
         :return: a new Coordinate object
         """
         if isinstance(other, int):
-            return Coordinates([x for count, x in enumerate(self.coordinates) if count != other - 1])
+            remaining = [x for count, x in enumerate(self.coordinates) if count != other - 1]
         elif isinstance(other, list) or isinstance(other, tuple):
-            return Coordinates([x for count, x in enumerate(self.coordinates) if count not in [x - 1 for x in other]])
-        self.update()
+            remaining = [x for count, x in enumerate(self.coordinates) if count not in [x - 1 for x in other]]
+        else:
+            return NotImplemented
+        return Coordinates(remaining, charge=self.charge, multiplet=self.multiplicity,
+                           periodic_cell=self.periodic_cell)
+
+    def _with_new_positions(self, new_coordinates_np):
+        """
+        Generate a new object with the same elements / charge / multiplicity / periodic
+        cell but new atom positions
+        :param new_coordinates_np: a list of 3-item np.ndarray, same length as atom_count
+        :return: a new Coordinates object
+        """
+        new_lines = ["{}\t{:.20f}\t{:.20f}\t{:.20f}".format(element, *point)
+                     for element, point in zip(self.elements, new_coordinates_np)]
+        return Coordinates(new_lines, charge=self.charge, multiplet=self.multiplicity,
+                           periodic_cell=self.periodic_cell)
+
+    def translate(self, vector):
+        """
+        Generate a new object, where all atoms are translated by `vector`
+        :param vector: a 3-item list / tuple / np.ndarray, in Å
+        :return: a new Coordinates object
+        """
+        vector = np.asarray(vector, dtype=float)
+        return self._with_new_positions([point + vector for point in self.coordinates_np])
+
+    def translate_atom_to_origin(self, atom_index):
+        """
+        Generate a new object, translated so the selected atom sits at (0, 0, 0)
+        :param atom_index: atom index start from 1
+        :return: a new Coordinates object
+        """
+        return self.translate(-self.coordinates_np[atom_index - 1])
+
+    def align_bond(self, bond_atom_index_1, bond_atom_index_2, target_direction):
+        """
+        Generate a new object, rotated about the centroid (the centroid stays fixed) so
+        the atom-1 → atom-2 vector aligns with `target_direction`. No translation is
+        performed — call translate() separately if a specific placement is needed.
+        :param bond_atom_index_1: atom index start from 1, the tail of the bond vector
+        :param bond_atom_index_2: atom index start from 1, the head of the bond vector
+        :param target_direction: a 3-item vector to align the bond with
+        :return: a new Coordinates object
+        """
+        bond_vector = self.coordinates_np[bond_atom_index_2 - 1] - self.coordinates_np[bond_atom_index_1 - 1]
+        if np.linalg.norm(bond_vector) < 1e-9:
+            raise ValueError("degenerate bond vector (zero length)")
+        rotation_matrix = rotation_vec1_to_vec2(bond_vector, np.asarray(target_direction, dtype=float))
+        centroid = np.mean(self.coordinates_np, axis=0)
+        return self._with_new_positions([rotation_matrix.dot(point - centroid) + centroid
+                                         for point in self.coordinates_np])
 
     def formula(self):
         a = list(collections.Counter(self.elements).items())
@@ -401,6 +536,7 @@ class Coordinates:
         # return a filename that are the generated gjf_file
 
         if not filename:
+            os.makedirs(TEMP_FOLDER_PATH, exist_ok=True)
             filename = os.path.join(TEMP_FOLDER_PATH, 'temp_' + readable_timestamp() + '.gjf')
 
         with open(filename, 'w') as output_file_object:
@@ -634,6 +770,39 @@ def get_angle(coordinate: Coordinates, atom_indexes):
 
 def get_unit_vector(vector):
     return vector / np.linalg.norm(vector)
+
+
+def rotation_vec1_to_vec2(vec1, vec2):
+    # adapted from https://stackoverflow.com/questions/45142959/calculate-rotation-matrix-to-align-two-vectors-in-3d-space
+    """ Find the rotation matrix that aligns vec1 to vec2
+    :param vec1: A 3d "source" vector
+    :param vec2: A 3d "destination" vector
+    :return mat: A transform matrix (3x3) which when applied to vec1, aligns it with vec2;
+                 if vec1 is already aligned with vec2, return identity;
+                 if vec1 is anti-aligned with vec2, return a 180° rotation about an
+                 arbitrary axis perpendicular to vec1
+    """
+    unit_vector_1 = get_unit_vector(np.asarray(vec1, dtype=float)).reshape(3)
+    unit_vector_2 = get_unit_vector(np.asarray(vec2, dtype=float)).reshape(3)
+    cos_angle = float(np.dot(unit_vector_1, unit_vector_2))
+    if cos_angle >= 1.0 - 1e-12:
+        return np.identity(3)
+    if cos_angle <= -1.0 + 1e-12:
+        # 180° flip: Rodrigues with theta=pi about any axis perpendicular to
+        # unit_vector_1 reduces to R = 2*outer(axis, axis) - I
+        axis = np.cross(unit_vector_1, np.array([1.0, 0.0, 0.0]))
+        if np.linalg.norm(axis) < 1e-9:
+            axis = np.cross(unit_vector_1, np.array([0.0, 1.0, 0.0]))
+        axis = get_unit_vector(axis)
+        return 2.0 * np.outer(axis, axis) - np.identity(3)
+    cross_product = np.cross(unit_vector_1, unit_vector_2)
+    sin_angle = np.linalg.norm(cross_product)
+    cross_product_matrix = np.array([[0, -cross_product[2], cross_product[1]],
+                                     [cross_product[2], 0, -cross_product[0]],
+                                     [-cross_product[1], cross_product[0], 0]])
+    rotation_matrix = (np.eye(3) + cross_product_matrix
+                       + cross_product_matrix.dot(cross_product_matrix) * ((1 - cos_angle) / (sin_angle ** 2)))
+    return rotation_matrix
 
 
 def get_normal_vector(point1, point2, point3):
