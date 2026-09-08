@@ -5,87 +5,152 @@ import sys
 import pathlib
 import platform
 import faulthandler
-faulthandler.enable()
+# faulthandler dumps low-level crash tracebacks to sys.stderr and needs a real
+# fileno() for it. If stderr has been replaced by something without one (a tee /
+# logger / pythonw's None), enabling it must not take down GUI startup — it's only
+# a debugging aid. Fall back to a no-op when it can't attach.
+try:
+    faulthandler.enable()
+except (AttributeError, ValueError, OSError):
+    pass
 
-from PyQt6 import QtGui, QtCore, QtWidgets, uic
-from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
-    QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog, \
-    QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout, \
-    QTextEdit, QSpinBox, QAbstractSpinBox, \
-    QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
-    QTableWidgetItem, QFrame, QSpacerItem, QSizePolicy, QTableWidget
-from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
-from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess, QObject
-from PyQt6.QtCore import Qt as QtCore_Qt
-from PyQt6.QtCore import QEvent
+try:
+    from PyQt6 import QtGui, QtCore, QtWidgets, uic
+    from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QMessageBox, \
+        QFileDialog, QGraphicsPixmapItem, QGraphicsScene, QInputDialog, QDialog, \
+        QListView, QAbstractItemView, QTreeView, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout, \
+        QTextEdit, QSpinBox, QAbstractSpinBox, \
+        QPushButton, QToolButton, QRadioButton, QCheckBox, QLineEdit, QDoubleSpinBox, \
+        QTableWidgetItem, QFrame, QSpacerItem, QSizePolicy, QTableWidget
+    from PyQt6.QtGui import QPixmap, QColor, QPainter, QPen, QFont, QDropEvent, QIcon, QTextCursor, QScreen, QKeyEvent, QTextCharFormat, QSyntaxHighlighter
+    from PyQt6.QtCore import QPoint, QTimer, QMimeData, QSize, pyqtSignal, QProcess, QObject
+    from PyQt6.QtCore import Qt as QtCore_Qt
+    from PyQt6.QtCore import QEvent
+    PYQT6_AVAILABLE = True
+except ImportError:
+    PYQT6_AVAILABLE = False
 
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
-from My_Lib_System import is_headless
+    class _QtStubMeta(type):
+        """Metaclass that returns _QtStubClass for any undefined class attribute."""
+        def __getattr__(cls, name):
+            return _QtStubClass
+
+    class _QtStubClass(metaclass=_QtStubMeta):
+        """Placeholder for all Qt classes — allows subclassing and attribute
+        chaining at class-definition time.  Instantiation is a silent no-op
+        so that patterns like QCoreApplication.instance() don't crash."""
+        def __init__(self, *args, **kwargs):
+            pass
+        def __init_subclass__(cls, **kwargs):
+            super().__init_subclass__(**kwargs)
+
+    class _QtStubModule:
+        """Module-like stub — attribute access returns _QtStubClass."""
+        def __getattr__(self, name):
+            return _QtStubClass
+
+    class _pyqtSignalStub:
+        """Descriptor stub so that `closing = pyqtSignal()` in a class body
+        succeeds at definition time."""
+        def __init__(self, *args, **kwargs):
+            pass
+        def emit(self, *args, **kwargs):
+            pass
+        def connect(self, *args, **kwargs):
+            pass
+        def disconnect(self, *args, **kwargs):
+            pass
+
+    QtGui = _QtStubModule()
+    QtCore = _QtStubModule()
+    QtWidgets = _QtStubModule()
+    uic = _QtStubModule()
+
+    QApplication = QMainWindow = QLabel = QMessageBox = _QtStubClass
+    QFileDialog = QGraphicsPixmapItem = QGraphicsScene = QInputDialog = QDialog = _QtStubClass
+    QListView = QAbstractItemView = QTreeView = QWidget = QLayout = _QtStubClass
+    QVBoxLayout = QHBoxLayout = QGridLayout = QTextEdit = QSpinBox = QAbstractSpinBox = _QtStubClass
+    QPushButton = QToolButton = QRadioButton = QCheckBox = QLineEdit = QDoubleSpinBox = _QtStubClass
+    QTableWidgetItem = QFrame = QSpacerItem = QSizePolicy = QTableWidget = _QtStubClass
+    QPixmap = QColor = QPainter = QPen = QFont = QDropEvent = QIcon = _QtStubClass
+    QTextCursor = QScreen = QKeyEvent = QTextCharFormat = QSyntaxHighlighter = _QtStubClass
+    QPoint = QTimer = QMimeData = QSize = QProcess = QObject = _QtStubClass
+    QEvent = _QtStubClass
+    QtCore_Qt = _QtStubClass
+    pyqtSignal = _pyqtSignalStub
+    QFontDatabase = QCoreApplication = _QtStubClass
+
+from Python_Lib.My_Lib_Stock import *
+from Python_Lib.My_Lib_System import is_headless
 
 if platform.system() == 'Windows':
     os.environ['QT_QPA_FONTDIR'] = 'C:/Windows/Fonts'
+    os.environ.setdefault('QT_STYLE_OVERRIDE', 'windowsvista')
 
-Qt_Keys = QtCore_Qt.Key
-Qt_Colors = QtCore_Qt.GlobalColor
+if PYQT6_AVAILABLE:
+    Qt_Keys = QtCore_Qt.Key
+    Qt_Colors = QtCore_Qt.GlobalColor
 
-QAspectRatioMode = QtCore_Qt.AspectRatioMode
-QKeepAspectRatio = QAspectRatioMode.KeepAspectRatio
+    QAspectRatioMode = QtCore_Qt.AspectRatioMode
+    QKeepAspectRatio = QAspectRatioMode.KeepAspectRatio
 
-QAlignmentFlag = QtCore_Qt.AlignmentFlag
-QAlignCenter = QAlignmentFlag.AlignCenter
+    QAlignmentFlag = QtCore_Qt.AlignmentFlag
+    QAlignCenter = QAlignmentFlag.AlignCenter
 
-QTransformationMode = QtCore_Qt.TransformationMode
-QSmoothTransformation = QTransformationMode.SmoothTransformation
+    QTransformationMode = QtCore_Qt.TransformationMode
+    QSmoothTransformation = QTransformationMode.SmoothTransformation
 
-QMessageBox_Abort = QMessageBox.StandardButton.Abort
-QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
-QMessageBox_Close = QMessageBox.StandardButton.Close
-QMessageBox_Discard = QMessageBox.StandardButton.Discard
-QMessageBox_Ignore = QMessageBox.StandardButton.Ignore
-QMessageBox_No = QMessageBox.StandardButton.No
-QMessageBox_NoToAll = QMessageBox.StandardButton.NoToAll
-QMessageBox_Ok = QMessageBox.StandardButton.Ok
-QMessageBox_Save = QMessageBox.StandardButton.Save
-QMessageBox_SaveAll = QMessageBox.StandardButton.SaveAll
-QMessageBox_Yes = QMessageBox.StandardButton.Yes
-QMessageBox_YesToAll = QMessageBox.StandardButton.YesToAll
+    QMessageBox_Abort = QMessageBox.StandardButton.Abort
+    QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
+    QMessageBox_Close = QMessageBox.StandardButton.Close
+    QMessageBox_Discard = QMessageBox.StandardButton.Discard
+    QMessageBox_Ignore = QMessageBox.StandardButton.Ignore
+    QMessageBox_No = QMessageBox.StandardButton.No
+    QMessageBox_NoToAll = QMessageBox.StandardButton.NoToAll
+    QMessageBox_Ok = QMessageBox.StandardButton.Ok
+    QMessageBox_Save = QMessageBox.StandardButton.Save
+    QMessageBox_SaveAll = QMessageBox.StandardButton.SaveAll
+    QMessageBox_Yes = QMessageBox.StandardButton.Yes
+    QMessageBox_YesToAll = QMessageBox.StandardButton.YesToAll
 
-QTextCursor_End = QTextCursor.MoveOperation.End
+    QTextCursor_End = QTextCursor.MoveOperation.End
 
-QCrossCursor = QtCore_Qt.CursorShape.CrossCursor
+    QCrossCursor = QtCore_Qt.CursorShape.CrossCursor
+else:
+    Qt_Keys = Qt_Colors = _QtStubClass
+    QAspectRatioMode = QKeepAspectRatio = _QtStubClass
+    QAlignmentFlag = QAlignCenter = _QtStubClass
+    QTransformationMode = QSmoothTransformation = _QtStubClass
+    QMessageBox_Abort = QMessageBox_Cancel = QMessageBox_Close = None
+    QMessageBox_Discard = QMessageBox_Ignore = QMessageBox_No = None
+    QMessageBox_NoToAll = QMessageBox_Ok = QMessageBox_Save = None
+    QMessageBox_SaveAll = QMessageBox_Yes = QMessageBox_YesToAll = None
+    QTextCursor_End = None
+    QCrossCursor = None
 
 import platform
-
-# import matplotlib
-# matplotlib.use("QtAgg")
-# from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as MpFigureCanvas
-# from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as MpNavToolBar
-# from matplotlib import pyplot
-# import matplotlib.patches as patches
-# from matplotlib.figure import Figure as MpFigure
-# from matplotlib import pylab
 
 import sys
 import pathlib
 
-def check_and_install_fonts():
-    import platform
-    import os
-    import shutil
-    import glob
-    import matplotlib
-    import matplotlib.font_manager as font_manager
+import platform
+import os
+import shutil
+import glob
+import matplotlib
+import matplotlib.font_manager as font_manager
+if PYQT6_AVAILABLE:
     from PyQt6.QtGui import QFontDatabase
     from PyQt6.QtCore import QCoreApplication
 
+def check_and_install_fonts():
+
     # Locate local fonts dir relative to this file
     # This file: .../src/Python_Lib/My_Lib_PyQt6.py
-    # Fonts dir: .../fonts/
+    # Fonts dir: .../src_Attachments/fonts/
     current_dir = pathlib.Path(__file__).parent.resolve()
     project_root = current_dir.parent.parent
-    local_fonts_dir = project_root / "fonts"
+    local_fonts_dir = project_root / "src_Attachments" / "fonts"
 
     if not local_fonts_dir.exists():
         # print(f"Fonts folder not found at {local_fonts_dir}")
@@ -226,9 +291,9 @@ def check_and_install_fonts():
             pass
 
 if __name__ != '__main__':
-    print("Checking fonts...")
+    # print("Checking fonts...")
     check_and_install_fonts()
-    print("Font checking complete.")
+    # print("Font checking complete.")
 
 #
 # def set_Windows_scaling_factor_env_var():
@@ -654,6 +719,7 @@ class ResizableLabel(QtWidgets.QLabel):
         if not text:
             self.setFixedHeight(0)
 
+        max_font_size = int(round(max_font_size))
 
         # Base font setup
         self.base_font = QtGui.QFont("Arial", max_font_size)
