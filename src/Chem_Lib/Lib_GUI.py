@@ -11,10 +11,11 @@ from .Lib_Utilities import fluctuation_determine
 
 import matplotlib
 
-matplotlib.use("QtAgg")
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as MpFigureCanvas
-from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as MpNavToolBar
-from matplotlib import pyplot
+if PYQT6_AVAILABLE:
+    matplotlib.use("QtAgg")
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as MpFigureCanvas
+    from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as MpNavToolBar
+    from matplotlib import pyplot
 
 class MpWidget_All(QWidget):
     def __init__(self, parent=None, y=None):
@@ -373,8 +374,8 @@ def find_scf_process_y_limit(energies: list):
     # return a three-tuple: [y-limit_min, y-limit_max, x_limit_min]
 
     if len(energies) <= 2:
-        dist = abs(energies[-1] - energies[0])
-        return [min(energies) - dist * 1.3 - 0.01, max(energies) + dist * 1.3 + 0.01, 0]
+        distance = abs(energies[-1] - energies[0])
+        return [min(energies) - distance * 1.3 - 0.01, max(energies) + distance * 1.3 + 0.01, 0]
 
     # 从最后一个元素依次前数，所需区间有多大
     pos_interval = [(min(energies[-x:]), max(energies[-x:])) for x in range(2, len(energies) + 1)]
@@ -421,8 +422,8 @@ def find_scf_process_y_limit(energies: list):
 
     high = interval_element[ret_index][-1]
     low = interval_element[ret_index][0]
-    dist = high - low
-    ret = [low - dist * 0.2, high + dist * 0.2]
+    interval_width = high - low
+    ret = [low - interval_width * 0.2, high + interval_width * 0.2]
 
     x_min = 0
     for i in range(len(energies)):

@@ -14,7 +14,10 @@ from .Lib_Gaussian import *
 from .Lib_CP2K import *
 # from .Lib_Data import *  # Lib_Data not found, commented out
 from .Lib_Filetype import Filetype, file_type
-from .Lib_GUI import *
+try:
+    from .Lib_GUI import *
+except ImportError:
+    pass
 from .Lib_MOPAC import *
 from .Lib_ORCA import *
 from .Lib_xTB import *
@@ -53,7 +56,7 @@ def unify_method(input_str: str):
     return input_str
 
 
-def load_factor_database(filename="校正因子.xlsx"):
+def load_factor_database(filename="Thermo_Correction_Factors.xlsx"):
 
     scaling_factor_database = pyexcel.get_records(file_name=filename)
     for line in scaling_factor_database:
