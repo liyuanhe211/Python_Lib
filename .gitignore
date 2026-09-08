@@ -4,7 +4,6 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-.eggs/
 lib/
 lib64/
 parts/
@@ -13,24 +12,46 @@ var/
 wheels/
 share/python-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
-.idea/
-.vscode
-.history
-__pycache__/
+_*
+\.*
+# `_*` 会误伤包标记文件，豁免之（历史上的 __init__.py 都是 git add -f 强加的）
+!__init__.py
 
 Secret
-Private
 *[Ss][Ee][Cc][Rr][Ee][Tt]*
+
+Private
 *[Pp][Rr][Ii][Vv][Aa][Tt][Ee]*
-*[Tt][Ee][Mm][Pp]*
 
 Obsolete
-0 TODO
-Plot_Temp_Scripts
-Multiwfn_executable
-My_Lib_Plot_Editor_Profiles
-Tools
+*[Oo][Bb][Ss][Oo][Ll][Ee][Tt][Ee]*
+
+Temp
+*[Tt][Ee][Mm][Pp]*
+
+TODO
+*[Tt][Oo][Dd][Oo]*
+
+src/Chem_Lib/Executable_*
+src/LLM_Lib/qdrant.exe
+Predownloaded_Weights/
+src_Saves
+Config.json
+
+# Converted copies of third-party copyrighted manuals (Gaussian, Multiwfn, ORCA, xTB) — for
+# local RAG only, keep out of the public repo. The Manual_*_README.md pointer files are tracked.
+/src/Chem_Lib/Manual_*_Full.md
+/src/Chem_Lib/Manual_*_README.md
+Chem_Lib_Manuals/
+
+# 统一的 Raysync 命令行客户端副本（rayfile-c.exe + 私有 DLL）：镭速的专有
+# 商业软件，不得进入公开仓库。只跟踪其中的来源说明 README.md。
+src/HPC_Lib/Raysync_Client/*
+!src/HPC_Lib/Raysync_Client/README.md
+
+# 项目协作规则文档只服务于本机的 Claude 会话，不进入公开仓库
+/CLAUDE.md
+
+# Claude 探索性脚本目录
+_Claude_tmp/
