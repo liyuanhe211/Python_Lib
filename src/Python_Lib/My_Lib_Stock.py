@@ -24,10 +24,7 @@ import importlib
 import importlib.util
 from typing import Optional, Union, Sequence, Tuple, List, Callable, TypeVar, Literal
 
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-
-from My_Lib_File import *
+from Python_Lib.My_Lib_File import *
 month_name = ["","January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 def is_torch_tensor(obj) -> bool:
@@ -924,7 +921,7 @@ def parse_range_selection(input_str, decrease_by_1=True):
     if not input_str.strip():
         return []
 
-    input_list = input_str.replace(',', ' ').split(' ')
+    input_list = input_str.replace(',', ' ').split()
     choices = copy.deepcopy(input_list)
 
     for choice in input_list:
@@ -1173,13 +1170,16 @@ def open_config_file():
     """
     Assuming this folder structure:
     Project_folder
-        - Python_Lib
-            - My_Lib_Stock.py
-        - Config.json
+        - src_Saves
+            - Config.json
+        - src
+            - Python_Lib
+                - My_Lib_Stock.py
     Returns:
 
     """
-    config_folder = str(pathlib.Path(__file__).parent.parent.resolve())
+    config_folder = str(pathlib.Path(__file__).resolve().parent.parent.parent / "src_Saves")
+    os.makedirs(config_folder, exist_ok=True)
     config_file_json = os.path.join(config_folder, 'Config.json')
     # for backward compatible
     config_file_ini = os.path.join(config_folder, 'Config.ini')
@@ -1222,8 +1222,9 @@ def get_config(config, key, absence_return=""):
 
 
 def save_config(config):
-    config_file = os.path.join(filename_class(sys.argv[0]).path, 'Config.json')
-    #    print(config_file)
+    config_folder = str(pathlib.Path(__file__).resolve().parent.parent.parent / "src_Saves")
+    os.makedirs(config_folder, exist_ok=True)
+    config_file = os.path.join(config_folder, 'Config.json')
     open(config_file, "w").write(json.dumps(config, indent=4))
 
 
@@ -1412,6 +1413,7 @@ class DualPrint:
 
     def write(self, message):
         self.original_stdout.write(message)
+        self.original_stdout.flush()
         self.log_file.write(message)
         self.log_file.flush()
 
@@ -1419,10 +1421,40 @@ class DualPrint:
         self.original_stdout.flush()
         self.log_file.flush()
 
+    def fileno(self):
+        # Delegate to the wrapped real stream so the tee can stand in for stdout/
+        # stderr wherever a true OS file descriptor is required — e.g.
+        # faulthandler.enable(), subprocess(..., stderr=sys.stderr), or any C
+        # extension that calls fileno(). Low-level writes via this fd reach the
+        # terminal directly (bypassing the log file), which is the right behaviour
+        # for crash dumps. The log_file has its own fileno and isn't the target here.
+        return self.original_stdout.fileno()
+
+    def isatty(self):
+        # Many libraries probe isatty() to decide on colour/progress output; mirror
+        # the real stream so behaviour matches an un-tee'd terminal.
+        return self.original_stdout.isatty()
+
     def set_file(self, filename):
         if not self.log_file.closed:
             self.log_file.close()
         self.log_file = open(filename, 'a', encoding='utf-8')
+
+
+def natural_language_sort_key(text):
+    """
+    Sort key for natural language sorting: splits text into numeric and non-numeric parts,
+    so that e.g. "file2" < "file10" (numeric segments compared as integers).
+    """
+    parts = re.split(r'(\d+)', text)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def natural_language_sort(lines):
+    """
+    Sort a list of strings using natural language ordering (numeric-aware).
+    """
+    return sorted(lines, key=natural_language_sort_key)
 
 
 def enable_dual_print(filename=None):
