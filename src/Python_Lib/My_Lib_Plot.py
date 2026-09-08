@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 __author__ = 'LiYuanhe'
 
+DEBUG_WINDOW_SIZE = False  # Print window size on render and resize events
+
 import pathlib
 import sys
 import time
@@ -11,21 +13,19 @@ import os
 if sys.platform != 'win32' and ('DISPLAY' not in os.environ or not os.environ.get('DISPLAY')):
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
-parent_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.insert(0, parent_path)
-
-from My_Lib import *
-from My_Lib_PyQt6 import *
-from My_Lib_Science import *
-from My_Lib_Plot_JSON import *
+from Python_Lib.My_Lib import *
+from Python_Lib.My_Lib_PyQt6 import *
+from Python_Lib.My_Lib_Science import *
+from Python_Lib.My_Lib_Plot_JSON import *
 import weakref
 import csv
 import threading
+import io
 import numpy as np
 import scipy.optimize
 import matplotlib
 
-if is_headless():
+if is_headless() or not PYQT6_AVAILABLE:
     matplotlib.use("Agg")
     from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
     NavigationToolbar = None
@@ -47,6 +47,24 @@ import matplotlib.colors as mcolors
 import json
 
 NON_ASCII_FONT_FILE = os.path.join(filename_parent(__file__), "SourceHanSansSC-Medium.otf")
+
+
+def _detect_cjk_fallback_fonts():
+    """CJK 回退字体列表，追加在 'arial' 之后传给 font.family。
+
+    matplotlib >= 3.6 对 font.family 列表逐字形回退：每个字符用列表中第一个
+    含有该字形的字体渲染，因此西文仍是 Arial，仅中文字符落到回退字体上。
+    仅在 Windows 且系统装有微软雅黑（即装了中文语言包）时返回非空列表；
+    非 Windows 或无该字体的系统返回空列表，行为与原先完全一致。
+    """
+    if sys.platform != 'win32':
+        return []
+    if any(font.name == 'Microsoft YaHei' for font in font_manager.fontManager.ttflist):
+        return ['Microsoft YaHei']
+    return []
+
+
+CJK_FALLBACK_FONTS = _detect_cjk_fallback_fonts()
 
 DEFAULT_FIG_DPI = 100.0
 POINTS_PER_INCH = 72.0
@@ -209,6 +227,183 @@ WINDOW_POSITIONS = {1: ((0, 0),),
                         (-2, 0.5),(-1, 0.5), (0, 0.5), (1, 0.5), (2, 0.5))}
 
 
+def format_value_at_pixel_resolution(value, per_pixel):
+    """Format ``value`` so its last shown digit is no finer than ~0.2 screen px.
+
+    ``per_pixel`` is the data-units-spanned-per-pixel along the axis at that
+    location. Resolving detail finer than 0.2 px is meaningless at the current
+    zoom, e.g. 0.1 units/px -> 0.02 threshold -> 2 decimals. Returns ``None``
+    when ``per_pixel`` is unusable so the caller can fall back to its own
+    formatting."""
+    if per_pixel is None or not np.isfinite(per_pixel) or per_pixel <= 0:
+        return None
+    threshold = 0.2 * per_pixel
+    decimals = max(0, int(np.ceil(-np.log10(threshold))))
+    return f"{value:.{decimals}f}"
+
+
+def compute_window_positions(n: int):
+    """Compute window grid positions for *n* windows.
+
+    Returns a tuple of (x, y) shift-window coordinates centred at the
+    screen centre (same convention as ``WINDOW_POSITIONS``).
+
+    For n ≤ 10, the hand-tuned ``WINDOW_POSITIONS`` dict is used.
+    For n > 10, positions are calculated automatically:
+
+    * Prefer 2 rows when n ≤ 12, 3 rows otherwise.
+    * Each row is centred horizontally.
+
+    The layout fills row-by-row from top to bottom; if the last row has
+    fewer items it is still centred.
+    """
+    if n <= 0:
+        return ()
+    if n in WINDOW_POSITIONS:
+        return WINDOW_POSITIONS[n]
+
+    import math
+    # Determine number of rows: 2 rows up to 12, 3 rows up to ~24, etc.
+    if n <= 12:
+        num_rows = 2
+    elif n <= 24:
+        num_rows = 3
+    else:
+        num_rows = math.ceil(n / 8)  # ~8 per row for very large n
+
+    cols_per_row = math.ceil(n / num_rows)
+
+    positions = []
+    remaining = n
+    for row_idx in range(num_rows):
+        this_row_count = min(cols_per_row, remaining)
+        remaining -= this_row_count
+        # y coordinate: centre the rows around 0
+        y = row_idx - (num_rows - 1) / 2.0
+        # x coordinates: centre this row around 0
+        for col_idx in range(this_row_count):
+            x = col_idx - (this_row_count - 1) / 2.0
+            positions.append((x, y))
+
+    return tuple(positions)
+
+
+# ─────────────────────── Shared toolbar icon helpers ───────────────────────
+# These module-level helpers are also used by Training_Control_Panel in
+# Machine_Learning_Lib.Utilities so keep them importable at module level.
+
+_PLOT_TOOLBAR_BTN_STYLE = (
+    "QPushButton { background-color: #f0f0f0; border: 1px solid #aaaaaa; padding: 0px; }"
+    "QPushButton:hover { background-color: #e0e0e0; }"
+    "QPushButton:pressed { background-color: #cccccc; }"
+    "QPushButton:checked { background-color: #aaaaaa; }"
+)
+
+
+def _make_plot_toolbar_icon(draw_func, render_size: int = 48) -> 'QtGui.QIcon':
+    """Create a monochrome QIcon rendered at *render_size* for sharpness.
+
+    Qt scales the icon down to the button's iconSize; rendering at a
+    larger size gives sub-pixel anti-aliasing and much crisper lines.
+    """
+    pixmap = QtGui.QPixmap(render_size, render_size)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+    # Default pen — individual draw funcs override as needed
+    pen = QtGui.QPen(QtCore.Qt.GlobalColor.black)
+    pen.setWidthF(max(1.5, render_size * 0.075))
+    pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+    draw_func(painter, render_size)
+    painter.end()
+    return QtGui.QIcon(pixmap)
+
+
+def _draw_plot_save_icon(p: 'QtGui.QPainter', s: int):
+    """Bold floppy-disk save icon (filled areas for clarity)."""
+    m = max(2, int(s * 0.10))       # outer margin
+    r = max(1, int(s * 0.06))       # corner radius
+    pw = p.pen().widthF()
+
+    # --- Outer body ---
+    p.drawRoundedRect(m, m, s - 2*m, s - 2*m, r, r)
+
+    lm  = int(s * 0.20)             # label left margin
+    lt  = int(s * 0.55)             # label top
+    lh  = s - m - lt                # label height
+
+    # Filled label area (bottom portion of disk body)
+    p.save()
+    p.setPen(QtCore.Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtGui.QColor(180, 180, 180)))
+    p.drawRect(lm, lt, s - 2*lm, lh)
+    p.restore()
+
+    # --- Shutter (top inset, filled darker) ---
+    sl = int(s * 0.28)              # shutter left (inside outer margin)
+    sh = int(s * 0.30)              # shutter height
+    sw = int(s * 0.42)              # shutter width
+    p.save()
+    p.setPen(QtCore.Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtGui.QColor(100, 100, 100)))
+    p.drawRect(sl, m, sw, sh)
+    p.restore()
+
+    # Small notch line in shutter (write-protect tab)
+    p.drawLine(int(s * 0.60), m + int(pw), int(s * 0.60), m + sh - int(pw))
+
+
+def _draw_plot_raise_icon(p: 'QtGui.QPainter', s: int):
+    """Solid upward-arrow raise-all icon."""
+    cx  = s / 2.0
+    top = int(s * 0.12)
+    mid = int(s * 0.50)             # arrowhead base y
+    bot = int(s * 0.88)
+    hw  = int(s * 0.28)             # arrowhead half-width
+    sw  = max(3, int(s * 0.16))     # shaft width
+
+    # Filled arrowhead
+    poly = QtGui.QPolygon([
+        QtCore.QPoint(int(cx),      top),
+        QtCore.QPoint(int(cx) - hw, mid),
+        QtCore.QPoint(int(cx) + hw, mid),
+    ])
+    p.save()
+    p.setPen(QtCore.Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.black))
+    p.drawPolygon(poly)
+    p.restore()
+
+    # Shaft
+    px1 = int(cx) - sw // 2
+    p.save()
+    p.setPen(QtCore.Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.black))
+    p.drawRect(px1, mid, sw, bot - mid)
+    p.restore()
+
+
+def _draw_plot_pause_icon(p: 'QtGui.QPainter', s: int):
+    """Two solid vertical bars representing pause."""
+    bar_w = max(4, int(s * 0.22))
+    top   = int(s * 0.15)
+    bar_h = int(s * 0.70)
+    gap   = max(3, int(s * 0.14))
+    total = 2 * bar_w + gap
+    x1 = (s - total) // 2
+    x2 = x1 + bar_w + gap
+    p.save()
+    p.setPen(QtCore.Qt.PenStyle.NoPen)
+    p.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.black))
+    p.drawRect(x1, top, bar_w, bar_h)
+    p.drawRect(x2, top, bar_w, bar_h)
+    p.restore()
+
+
 class Global_QApplication:
     """
     Helper to ensure that only one QApplication is created/reused.
@@ -233,7 +428,7 @@ class Global_QApplication:
 
 def convert_torch_tensor(input_):
     if type(input_).__name__ == "Tensor" and type(input_).__module__ == "torch":
-        from My_Lib_MachineLearning import tensor_to_list
+        from Machine_Learning_Lib.Machine_Learning import tensor_to_list
         return tensor_to_list(input_)
     elif isinstance(input_, (list, tuple)):
         # recursively handle lists/tuples
@@ -244,16 +439,20 @@ def convert_torch_tensor(input_):
 
 
 try:
-    from .My_Lib_Plot_JSON import Curve_DataClass, Grid_DataClass, Plot_DataClass, check_consistency
+    from .My_Lib_Plot_JSON import Curve_DataClass, Grid_DataClass, Bar_DataClass, Plot_DataClass, check_consistency
 except ImportError:
     try:
-        from My_Lib_Plot_JSON import Curve_DataClass, Grid_DataClass, Plot_DataClass, check_consistency
+        from My_Lib_Plot_JSON import Curve_DataClass, Grid_DataClass, Bar_DataClass, Plot_DataClass, check_consistency
     except ImportError:
         print("Warning: My_Lib_Plot_JSON could not be imported.")
 
 
 def Curve_from_JSON(filename_or_content) -> 'Curve':
-    if isinstance(filename_or_content, str) and (os.path.isfile(filename_or_content) or filename_or_content.endswith('.json')):
+    if isinstance(filename_or_content, str) and (
+        os.path.isfile(filename_or_content)
+        or filename_or_content.lower().endswith('.json.curve')
+        or filename_or_content.endswith('.json')
+    ):
         with open(filename_or_content, 'r', encoding='utf-8') as f:
             data = json.load(f)
     elif isinstance(filename_or_content, str):
@@ -273,7 +472,11 @@ def Curve_from_JSON(filename_or_content) -> 'Curve':
     return Curve(**data)
 
 def Grid_from_JSON(filename_or_content) -> 'Grid':
-    if isinstance(filename_or_content, str) and (os.path.isfile(filename_or_content) or filename_or_content.endswith('.json')):
+    if isinstance(filename_or_content, str) and (
+        os.path.isfile(filename_or_content)
+        or filename_or_content.lower().endswith('.json.grid')
+        or filename_or_content.endswith('.json')
+    ):
         with open(filename_or_content, 'r', encoding='utf-8') as f:
             data = json.load(f)
     elif isinstance(filename_or_content, str):
@@ -284,6 +487,23 @@ def Grid_from_JSON(filename_or_content) -> 'Grid':
         raise ValueError("Invalid input for Grid_from_JSON")
         
     return Grid(**data)
+
+def Bar_from_JSON(filename_or_content) -> 'Bar':
+    if isinstance(filename_or_content, str) and (
+        os.path.isfile(filename_or_content)
+        or filename_or_content.lower().endswith('.json.bar')
+        or filename_or_content.endswith('.json')
+    ):
+        with open(filename_or_content, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    elif isinstance(filename_or_content, str):
+        data = json.loads(filename_or_content)
+    elif isinstance(filename_or_content, dict):
+        data = filename_or_content
+    else:
+        raise ValueError("Invalid input for Bar_from_JSON")
+
+    return Bar(**data)
 
 def Plot_from_JSON(filename_or_content, target_window: 'Plot' = None) -> 'Plot':
     """
@@ -304,7 +524,11 @@ def Plot_from_JSON(filename_or_content, target_window: 'Plot' = None) -> 'Plot':
     Plot
         A new Plot (if target_window is None) or the updated target_window.
     """
-    if isinstance(filename_or_content, str) and (os.path.isfile(filename_or_content) or filename_or_content.endswith('.json')):
+    if isinstance(filename_or_content, str) and (
+        os.path.isfile(filename_or_content)
+        or filename_or_content.lower().endswith('.plot')
+        or filename_or_content.endswith('.json')
+    ):
         with open(filename_or_content, 'r', encoding='utf-8') as f:
             data = json.load(f)
     elif isinstance(filename_or_content, str):
@@ -313,6 +537,21 @@ def Plot_from_JSON(filename_or_content, target_window: 'Plot' = None) -> 'Plot':
         data = filename_or_content
     else:
         raise ValueError("Invalid input for Plot_from_JSON")
+
+    def _deserialize_object_list(objects, converter):
+        if not objects:
+            return []
+        if isinstance(objects, list):
+            return [converter(obj) for obj in objects]
+        return [converter(objects)]
+
+    def _deserialize_object_frames(frames, converter):
+        if not frames:
+            return []
+        ret = []
+        for frame in frames:
+            ret.append(_deserialize_object_list(frame, converter))
+        return ret
 
     # Deserialize Curve_objects and Grid_objects
     if data.get('Curve_objects'):
@@ -328,6 +567,22 @@ def Plot_from_JSON(filename_or_content, target_window: 'Plot' = None) -> 'Plot':
             data['Grid_objects'] = [Grid_from_JSON(g) for g in grids]
         else:
             data['Grid_objects'] = Grid_from_JSON(grids)
+
+    if data.get('Bar_objects'):
+        bars = data['Bar_objects']
+        if isinstance(bars, list):
+            data['Bar_objects'] = [Bar_from_JSON(b) for b in bars]
+        else:
+            data['Bar_objects'] = Bar_from_JSON(bars)
+
+    if data.get('Curve_objects_frames'):
+        data['Curve_objects_frames'] = _deserialize_object_frames(data['Curve_objects_frames'], Curve_from_JSON)
+
+    if data.get('Grid_objects_frames'):
+        data['Grid_objects_frames'] = _deserialize_object_frames(data['Grid_objects_frames'], Grid_from_JSON)
+
+    if data.get('Bar_objects_frames'):
+        data['Bar_objects_frames'] = _deserialize_object_frames(data['Bar_objects_frames'], Bar_from_JSON)
 
     if target_window is not None:
         # --- In-place update of the existing Plot window ---
@@ -347,15 +602,31 @@ def Plot_from_JSON(filename_or_content, target_window: 'Plot' = None) -> 'Plot':
         if 'window_title' in data: w.set_window_title(data['window_title'])
         # shift_window is INTENTIONALLY SKIPPED to avoid moving existing windows
 
-        # Update the plot data (triggers _update_plot via the property setter)
-        new_objects = []
-        if data.get('Curve_objects'):
-            co = data['Curve_objects']
-            new_objects.extend(co if isinstance(co, list) else [co])
-        if data.get('Grid_objects'):
-            go = data['Grid_objects']
-            new_objects.extend(go if isinstance(go, list) else [go])
-        w.plot_objects = new_objects
+        has_frames = bool(data.get('Curve_objects_frames') or data.get('Grid_objects_frames') or data.get('Bar_objects_frames'))
+        if has_frames:
+            w.set_plot_frames(
+                Curve_objects_frames=data.get('Curve_objects_frames'),
+                Grid_objects_frames=data.get('Grid_objects_frames'),
+                Bar_objects_frames=data.get('Bar_objects_frames'),
+                current_frame_index=data.get('current_frame_index', 0),
+                frame_labels=data.get('frame_labels'),
+            )
+        else:
+            # Update the plot data (triggers _update_plot via the property setter)
+            new_objects = []
+            if data.get('Curve_objects'):
+                curve_objects = data['Curve_objects']
+                new_objects.extend(curve_objects if isinstance(curve_objects, list) else [curve_objects])
+            if data.get('Grid_objects'):
+                grid_objects = data['Grid_objects']
+                new_objects.extend(grid_objects if isinstance(grid_objects, list) else [grid_objects])
+            if data.get('Bar_objects'):
+                bar_objects = data['Bar_objects']
+                new_objects.extend(bar_objects if isinstance(bar_objects, list) else [bar_objects])
+            w.plot_objects = new_objects
+
+        if 'current_frame_index' in data and hasattr(w, '_set_current_frame'):
+            w._set_current_frame(data['current_frame_index'])
 
         return w
 
@@ -381,6 +652,9 @@ class Curve:
                  plot_dot=None,
                  dot_format=point_mkr,  # given as string, or tuple of strings with the sequence of marker-line
                  dot_color=None,
+                 dot_alpha=None,
+                 dot_edge_color=None,
+                 dot_edge_width=None,
                  dot_width=5,
                  plot_curve=None,
                  curve_format="",  # given as string, or tuple of strings with the sequence of marker-line
@@ -396,6 +670,7 @@ class Curve:
                  normalize_to: Union[None, Tuple[float, float], float] = None,
                  scale_factor: Optional[float] = None,
                  fill_color=None,  # Fill between curve and Y=0. str (single color), str (fill scheme name from FILL_SCHEMES), or None
+                 fill_alpha=0.3,  # Alpha transparency for fill area (0.0–1.0)
                  XYs=None  # Same as X_and_Y, For backward compatibility
                  ):
 
@@ -410,6 +685,8 @@ class Curve:
         :param plot_dot:
         :param dot_format:
         :param dot_color:
+        :param dot_alpha: Transparency for dot face. Default 0.7 when plot_dot is True.
+        :param dot_edge_color: Edge color for dots. None means same as dot_color with full opacity.
         :param dot_width:
         :param plot_curve:
         :param curve_format:
@@ -466,10 +743,10 @@ class Curve:
             except ValueError as _:
                 Y = fitted_function(X)
 
-        self.Y_error_bar = Y_errorbar
+        self.Y_errorbar = Y_errorbar
         if Y_sampling_data:
             Y = np.mean(Y_sampling_data, axis=1)
-            self.Y_error_bar = np.apply_along_axis(error_bar, axis=1, arr=Y_sampling_data)
+            self.Y_errorbar = np.apply_along_axis(error_bar, axis=1, arr=Y_sampling_data)
 
         assert (len(X) and len(Y)) or len(X_and_Y), "No data is given."
         assert not ((len(X) or len(Y)) and len(X_and_Y)), "Duplicated data is given."
@@ -510,6 +787,9 @@ class Curve:
         self.plot_dot = plot_dot
         self.dot_format = dot_format
         self.dot_color = dot_color
+        self.dot_alpha = dot_alpha
+        self.dot_edge_color = dot_edge_color
+        self.dot_edge_width = dot_edge_width
         self.dot_width = dot_width
         self.plot_curve = plot_curve
         self.curve_format = curve_format
@@ -519,6 +799,7 @@ class Curve:
         self.curve_legend_color = curve_legend_color
         self.curve_legend_format = curve_legend_format
         self.fill_color = fill_color  # str (color), str (fill scheme name), or None
+        self.fill_alpha = fill_alpha
         self._interpolation_xs = None
         self._interp1d = None
 
@@ -608,6 +889,9 @@ class Curve:
                                        plot_dot=self.plot_dot,
                                        dot_format=self.dot_format,
                                        dot_color=self.dot_color,
+                                       dot_alpha=self.dot_alpha,
+                                       dot_edge_color=self.dot_edge_color,
+                                       dot_edge_width=self.dot_edge_width,
                                        dot_width=self.dot_width,
                                        plot_curve=self.plot_curve,
                                        curve_format=self.curve_format,
@@ -654,31 +938,34 @@ class Curve:
         export_list = [[self.X_label] + list(self.Xs), [self.Y_label] + list(self.Ys)]
         write_xlsx(path, export_list, transpose=True)
 
-    def backup(self, tag=""):
-        """
-            :return: an object which has the same content of this object, but are independent to internal changes.
-        """
+    # def backup(self, tag=""):
+    #     """
+    #         :return: an object which has the same content of this object, but are independent to internal changes.
+    #     """
 
-        raise Exception("The backup function is outdated and needs to be updated with the new parameters.")
-        # TODO: This need to be updated
+    #     raise Exception("The backup function is outdated and needs to be updated with the new parameters.")
+    #     # TODO: This need to be updated
 
-        if tag:
-            tag = " " + tag
+    #     if tag:
+    #         tag = " " + tag
 
-        return Curve(X=copy.deepcopy(self.Xs),
-                     Y=copy.deepcopy(self.Ys),
-                     X_label=self.X_label,
-                     Y_label=self.Y_label + " " + tag,
-                     plot_dot=self.plot_dot,
-                     dot_format=self.dot_format,
-                     dot_color=self.dot_color,
-                     dot_width=self.dot_width,
-                     plot_curve=self.plot_curve,
-                     curve_format=self.curve_format,
-                     curve_color=self.curve_color,
-                     curve_width=self.curve_width,
-                     interpolation_kind=self.interpolation_kind,
-                     interpolation_number=self.interpolation_number)
+    #     return Curve(X=copy.deepcopy(self.Xs),
+    #                  Y=copy.deepcopy(self.Ys),
+    #                  X_label=self.X_label,
+    #                  Y_label=self.Y_label + " " + tag,
+    #                  plot_dot=self.plot_dot,
+    #                  dot_format=self.dot_format,
+    #                  dot_color=self.dot_color,
+    #                  dot_alpha=self.dot_alpha,
+    #                  dot_edge_color=self.dot_edge_color,
+    #                  dot_edge_width=self.dot_edge_width,
+    #                  dot_width=self.dot_width,
+    #                  plot_curve=self.plot_curve,
+    #                  curve_format=self.curve_format,
+    #                  curve_color=self.curve_color,
+    #                  curve_width=self.curve_width,
+    #                  interpolation_kind=self.interpolation_kind,
+    #                  interpolation_number=self.interpolation_number)
 
     def manipulate_with(self, other, computation_function):
         if isinstance(other, Curve):
@@ -721,6 +1008,9 @@ class Curve:
             plot_dot=self.plot_dot,
             dot_format=self.dot_format,
             dot_color=self.dot_color,
+            dot_alpha=self.dot_alpha,
+            dot_edge_color=self.dot_edge_color,
+            dot_edge_width=self.dot_edge_width,
             dot_width=self.dot_width,
             plot_curve=self.plot_curve,
             curve_format=self.curve_format,
@@ -732,7 +1022,8 @@ class Curve:
             interpolation_number=self.interpolation_number,
             curve_legend_color=self.curve_legend_color,
             curve_legend_format=self.curve_legend_format,
-            fill_color=self.fill_color
+            fill_color=self.fill_color,
+            fill_alpha=self.fill_alpha
         )
 
     def dump_to_JSON(self, filename):
@@ -823,8 +1114,9 @@ class Curve:
             weight_interp = np.interp(interp_xs, w_xs, w_ys)
             curve_interp = curve_interp * weight_interp
 
-        # trapezoidal integration
-        result = float(np.trapz(curve_interp, interp_xs))
+        # trapezoidal integration (np.trapz removed in numpy 2.x)
+        trapezoid = getattr(np, 'trapezoid', None) or np.trapz
+        result = float(trapezoid(curve_interp, interp_xs))
         return result
 
 
@@ -869,7 +1161,8 @@ class Grid:
                  
                  grid_line_X=None, # True, False, list of strings or float (spacing)
                  grid_line_Y=None, # True, False, list of strings or float (spacing)
-                 show_colorbar=False
+                 show_colorbar=False,
+                 show_heatmap=True,  # If False, the filled pcolormesh is skipped — useful when this Grid is layered on top of another Grid as a contour-only overlay.
                  ):
         """
         Initialize a Grid object for plotting 3D data (heatmap/contour).
@@ -950,6 +1243,7 @@ class Grid:
         self.grid_line_X = grid_line_X
         self.grid_line_Y = grid_line_Y
         self.show_colorbar = show_colorbar
+        self.show_heatmap = show_heatmap
 
         self.Xs = None
         self.Ys = None
@@ -1166,8 +1460,169 @@ class Grid:
             scale_factor=None,
             grid_line_X=self.grid_line_X,
             grid_line_Y=self.grid_line_Y,
-            show_colorbar=self.show_colorbar
-        )        
+            show_colorbar=self.show_colorbar,
+            show_heatmap=self.show_heatmap,
+        )
+
+    def dump_to_JSON(self, filename):
+        self.to_JSON_data().dump_to_JSON(filename)
+
+
+# ─────────────────────── Modern default bar color palette ───────────────────────
+BAR_DEFAULT_COLORS = [
+    '#5B3C88', '#3566A7', '#4C8DCA', '#75B3E6',
+    '#5AA8A8', '#8FD2A1', '#63B77A', '#BFE7C3',
+    '#F4A261', '#E76F51', '#264653', '#2A9D8F',
+]
+
+
+class Bar:
+    """Bar chart data object for use with the Plot class.
+
+    Mirrors the Curve / Grid pattern: create a Bar object and pass it to
+    ``Plot(Bar_objects=[bar])`` (or assign to ``plot.Bar_objects``).
+
+    Parameters
+    ----------
+    categories : list[str]
+        Category labels for each bar.
+    values : list[float]
+        Numeric value for each bar.
+    Y_label : str
+        Label used in the legend entry for this Bar group.
+    colors : list[str] or None
+        Per-bar colors.  If None, ``BAR_DEFAULT_COLORS`` palette is cycled.
+    color : str or None
+        Single color applied to all bars (overridden by *colors*).
+    alpha : float
+        Bar fill opacity (0–1).
+    edge_color : str
+        Color of bar edges.
+    edge_width : float
+        Width of bar edges.
+    bar_width : float
+        Relative width of each bar (0–1).
+    show_value_labels : bool
+        If True, display the value above / beside each bar.
+    value_label_format : str
+        Python format string for the value label, e.g. ``"{:.1f}"``.
+    value_label_fontsize : float or None
+        Font size for value labels.  None → ``font_size - 2`` in Plot.
+    value_label_color : str
+        Color for value labels.
+    value_label_offset : float or None
+        Offset (in data units) between bar top and label. None → auto.
+    sort_by_value : bool
+        If True, bars are drawn sorted by value.
+    sort_ascending : bool
+        Sort direction when *sort_by_value* is True.
+    highlight : list[str] or None
+        Category names to visually emphasise (bold tick label / value).
+    highlight_bold_label : bool
+        Bold tick labels for highlighted categories.
+    highlight_bold_value : bool
+        Bold value labels for highlighted categories.
+    orientation : str
+        ``'vertical'`` (default) or ``'horizontal'``.
+    hatch : str or None
+        Hatch pattern string (e.g. ``'/'``, ``'//'``, ``'x'``).
+    corner_radius : float or None
+        Reserved for future rounded-bar support.  Currently unused.
+    """
+
+    def __init__(
+        self,
+        categories=None,
+        values=None,
+        Y_label="",
+        colors=None,
+        color=None,
+        alpha=0.85,
+        edge_color='#333333',
+        edge_width=0.6,
+        bar_width=0.7,
+        show_value_labels=True,
+        value_label_format="{:.3f}",
+        value_label_fontsize=None,
+        value_label_color='#333333',
+        value_label_offset=None,
+        sort_by_value=False,
+        sort_ascending=True,
+        highlight=None,
+        highlight_bold_label=True,
+        highlight_bold_value=True,
+        orientation="vertical",
+        hatch=None,
+        corner_radius=None,
+    ):
+        self.categories = list(categories) if categories is not None else []
+        self.values = list(values) if values is not None else []
+        self.Y_label = Y_label
+        self.colors = list(colors) if colors is not None else None
+        self.color = color
+        self.alpha = alpha
+        self.edge_color = edge_color
+        self.edge_width = edge_width
+        self.bar_width = bar_width
+        self.show_value_labels = show_value_labels
+        self.value_label_format = value_label_format
+        self.value_label_fontsize = value_label_fontsize
+        self.value_label_color = value_label_color
+        self.value_label_offset = value_label_offset
+        self.sort_by_value = sort_by_value
+        self.sort_ascending = sort_ascending
+        self.highlight = set(highlight) if highlight else set()
+        self.highlight_bold_label = highlight_bold_label
+        self.highlight_bold_value = highlight_bold_value
+        self.orientation = orientation
+        self.hatch = hatch
+        self.corner_radius = corner_radius
+
+    # ── helpers ──
+
+    def _resolved_order(self):
+        """Return indices in the order bars should be drawn."""
+        indices = list(range(len(self.categories)))
+        if self.sort_by_value:
+            indices.sort(key=lambda i: self.values[i], reverse=not self.sort_ascending)
+        return indices
+
+    def _resolved_colors(self, n):
+        """Return a list of *n* colors, cycling from the palette if needed."""
+        if self.colors is not None:
+            return (self.colors * ((n // len(self.colors)) + 1))[:n]
+        if self.color is not None:
+            return [self.color] * n
+        palette = BAR_DEFAULT_COLORS
+        return (palette * ((n // len(palette)) + 1))[:n]
+
+    # ── JSON serialization ──
+
+    def to_JSON_data(self):
+        return Bar_DataClass(
+            categories=self.categories,
+            values=self.values,
+            Y_label=self.Y_label,
+            colors=self.colors,
+            color=self.color,
+            alpha=self.alpha,
+            edge_color=self.edge_color,
+            edge_width=self.edge_width,
+            bar_width=self.bar_width,
+            show_value_labels=self.show_value_labels,
+            value_label_format=self.value_label_format,
+            value_label_fontsize=self.value_label_fontsize,
+            value_label_color=self.value_label_color,
+            value_label_offset=self.value_label_offset,
+            sort_by_value=self.sort_by_value,
+            sort_ascending=self.sort_ascending,
+            highlight=list(self.highlight) if self.highlight else None,
+            highlight_bold_label=self.highlight_bold_label,
+            highlight_bold_value=self.highlight_bold_value,
+            orientation=self.orientation,
+            hatch=self.hatch,
+            corner_radius=self.corner_radius,
+        )
 
     def dump_to_JSON(self, filename):
         self.to_JSON_data().dump_to_JSON(filename)
@@ -1180,6 +1635,10 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             # You can leave both to be None to create an empty plot window, and update them later with update_plot
             Curve_objects: Union[Curve, Sequence[Curve], None] = None,
             Grid_objects: Union[Grid, Sequence[Grid], None] = None,
+            Bar_objects: Union['Bar', Sequence['Bar'], None] = None,
+            Curve_objects_frames: Union[Sequence[Sequence[Curve]], None] = None,
+            Grid_objects_frames: Union[Sequence[Sequence[Grid]], None] = None,
+            Bar_objects_frames: Union[Sequence[Sequence['Bar']], None] = None,
             
             x_axis_label="X",
             y_axis_label="Y",
@@ -1208,6 +1667,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             save_img_filepath=None,
             # if is a string, the plot will be saved to the filepath as png file, without showing
             save_img_dpi=3000,
+            copy_img_dpi=600,
             use_chinese_font=False,
             parent=None,
             shift_window=(0, 0),
@@ -1216,6 +1676,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             figure_title="",
             window_title="Plot Points Window",
             keep_front=False,  # If True, the window stays on top of all other windows
+            current_frame_index=0,
+            frame_labels=None,  # Optional list of per-frame labels shown in the frame control bar (e.g. ["E01000", "E02000", ...])
     ):
         self._app = Global_QApplication.get_app()
 
@@ -1245,6 +1707,10 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self.chinese_font = use_chinese_font
         self.save_img_filepath = save_img_filepath
         self.save_img_dpi = save_img_dpi
+        self.copy_img_dpi = copy_img_dpi
+        # When None/empty -> save PNG with transparent background.
+        # When set (e.g. 'white', '#ffffff'), use that as savefig facecolor.
+        self.save_bg_color = None
         self.current_location = (0, 0)
         self._additional_offset_px = (0, 0)
         self.comrades: Sequence[QWidget] = []
@@ -1252,7 +1718,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             shift_window = (shift_window, 0)
         if multiple_plot_arrangement is not None:
             current_window_number, total_windows = multiple_plot_arrangement
-            shift_window = WINDOW_POSITIONS[total_windows][current_window_number]
+            shift_window = compute_window_positions(total_windows)[current_window_number]
         self._shift_window = shift_window
 
         matplotlib.rcParams['savefig.dpi'] = self.save_img_dpi
@@ -1271,6 +1737,21 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         
         self._window_size_pixel = window_size_pixel  # Store for later use
         
+        # Track which sizing mode is active (mutually exclusive).
+        # 'inch':   fig_size_inch controls axes area size in inches (default)
+        # 'pixel':  fig_size_pixel controls axes area size in pixels
+        # 'window': window_size_pixel controls total window size, figure fills canvas
+        if window_size_pixel is not None:
+            self._size_mode = 'window'
+        elif fig_size_pixel is not None:
+            self._size_mode = 'pixel'
+        else:
+            self._size_mode = 'inch'
+
+        # Cache for calibrated figure size (avoids extra draw on subsequent frames)
+        self._cached_fig_inches = None
+        self._cached_fig_inches_key = None
+
         if window_size_pixel is not None:
             # When window_size_pixel is set, we'll adjust after creating the window
             # Start with a reasonable fig size, then adjust window
@@ -1293,47 +1774,171 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         # Correct size with actual DPI and HiDPI detection
         self._setup_figure_size()
 
-        # Navigation toolbar setup
+        # Navigation toolbar setup (coordinates=False: we manage our own coord label)
         self._toolbar = None
         toolbar_height = None
         if NavigationToolbar:
-            self._toolbar = NavigationToolbar(self._canvas, self)
+            self._toolbar = NavigationToolbar(self._canvas, self, coordinates=False)
             self._toolbar.setStyleSheet("background-color: #f0f0f0;")
             self._toolbar.setIconSize(QtCore.QSize(16, 16)) # Small icons
-            
+
             # ALLOW TOOLBAR TO SHRINK: Ignore horizontal size hint and set min width to 0
             self._toolbar.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed)
             self._toolbar.setMinimumWidth(0)
-
-        # Create the “Pause” button
-        self.pause_button = QtWidgets.QPushButton("Pause", self)
-        self.pause_button.setStyleSheet("background-color: #f0f0f0;")
-        self.pause_button.setCheckable(True)
-        pause_font = QtGui.QFont("Arial", 10)
-        self.pause_button.setFont(pause_font)
-        # Match toolbar button height
-        if self._toolbar:
             toolbar_height = self._toolbar.sizeHint().height()
-            self.pause_button.setFixedSize(60, toolbar_height)
 
-        # Create the “Bring to front” button
-        self.raise_button = QtWidgets.QPushButton("Raise All", self)
-        self.raise_button.setStyleSheet("background-color: #f0f0f0;")
-        raise_font = QtGui.QFont("Arial", 10)
-        self.raise_button.setFont(raise_font)
-        if toolbar_height:
-            self.raise_button.setFixedSize(60, toolbar_height)
+        # -- Coordinate display label (separate from toolbar) --
+        self._coord_label = QtWidgets.QLabel("", self)
+        self._coord_label.setStyleSheet("background-color: #f0f0f0; padding: 0px 4px;")
+        self._coord_label.setFont(QtGui.QFont("Arial", 9))
+        self._coord_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self._coord_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        # Height will be set after unified _row_height is computed below
+
+        # Route toolbar coordinate messages to our label
+        if self._toolbar:
+            self._toolbar.set_message = self._set_coord_message
+
+        # Cursor-readout descriptor for the front-most Grid heatmap, populated
+        # by _update_plot_grid; cleared at the start of every _update_plot().
+        # When set, format_coord shows (x, y, z); otherwise (x, y).
+        self._heatmap_lookup = None
+
+        # Custom format_coord: show x/y at ~0.2 px resolution (same rule as the
+        # click readout), falling back to smart_format_float when the axes
+        # transform isn't usable yet. z (heatmap value) keeps smart_format_float.
+        def _custom_format_coord(x, y):
+            sx = sy = None
+            try:
+                trans = self._ax.transData
+                inv = trans.inverted()
+                px, py = trans.transform((x, y))
+                sx = format_value_at_pixel_resolution(
+                    x, abs(inv.transform((px + 1, py))[0] - x))
+                sy = format_value_at_pixel_resolution(
+                    y, abs(inv.transform((px, py + 1))[1] - y))
+            except Exception:
+                pass
+            if sx is None:
+                sx = smart_format_float(x, precision=3, scientific_notation_limit=6)
+            if sy is None:
+                sy = smart_format_float(y, precision=3, scientific_notation_limit=6)
+            lookup = self._heatmap_lookup
+            if lookup is not None:
+                gx = lookup['grid_x_1d']
+                gy = lookup['grid_y_1d']
+                gz = lookup['grid_z']
+                if (gx.size and gy.size
+                        and gx[0] <= x <= gx[-1] and gy[0] <= y <= gy[-1]):
+                    ix = int(np.clip(np.searchsorted(gx, x), 1, len(gx) - 1))
+                    if ix > 0 and abs(gx[ix - 1] - x) < abs(gx[ix] - x):
+                        ix -= 1
+                    iy = int(np.clip(np.searchsorted(gy, y), 1, len(gy) - 1))
+                    if iy > 0 and abs(gy[iy - 1] - y) < abs(gy[iy] - y):
+                        iy -= 1
+                    z = gz[iy, ix]
+                    if np.isfinite(z):
+                        sz = smart_format_float(float(z), precision=3, scientific_notation_limit=6)
+                        return f"(x, y, z) = ({sx}, {sy}, {sz})"
+            return f"(x, y) = ({sx}, {sy})"
+        self._custom_format_coord = _custom_format_coord
+        self._ax.format_coord = _custom_format_coord
+
+        # -- Determine unified row height across all header rows --
+        # Create frame widgets early so we can measure the spinbox height with font applied.
+        _arial9 = QtGui.QFont("Arial", 9)
+
+        self._frame_name_label = QtWidgets.QLabel("Frame 1/1")
+        self._frame_name_label.setFont(_arial9)
+        self._frame_name_label.setMinimumWidth(90)
+        self._frame_name_label.setMaximumWidth(200)
+
+        self._frame_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._frame_slider.setMinimum(0)
+        self._frame_slider.setMaximum(0)
+
+        self._frame_spinbox = QtWidgets.QSpinBox()
+        self._frame_spinbox.setMinimum(1)
+        self._frame_spinbox.setMaximum(1)
+        self._frame_spinbox.setFixedWidth(70)
+        self._frame_spinbox.setFont(_arial9)
+
+        # Unified row height = max of toolbar height and spinbox natural height
+        _spinbox_h = self._frame_spinbox.sizeHint().height()
+        _row_height = max(toolbar_height or 24, _spinbox_h)
+
+        # Apply unified height to coord label and toolbar
+        self._coord_label.setFixedHeight(_row_height)
+        if self._toolbar:
+            self._toolbar.setFixedHeight(_row_height)
+
+        # -- Create small square icon buttons (same height as rows) --
+        # Icons are rendered at 48x48 for sharpness; Qt scales to button size.
+        _btn_size = _row_height
+        _icon_btn_style = _PLOT_TOOLBAR_BTN_STYLE
+
+        self.save_button = QtWidgets.QPushButton(self)
+        self.save_button.setIcon(_make_plot_toolbar_icon(_draw_plot_save_icon))
+        self.save_button.setIconSize(QtCore.QSize(_btn_size - 4, _btn_size - 4))
+        self.save_button.setToolTip("Save plot (PNG + SVG + JSON)")
+        self.save_button.setFixedSize(_btn_size, _btn_size)
+        self.save_button.setStyleSheet(_icon_btn_style)
+        connect_once(self.save_button, self._on_save_button_clicked)
+
+        self.raise_button = QtWidgets.QPushButton(self)
+        self.raise_button.setIcon(_make_plot_toolbar_icon(_draw_plot_raise_icon))
+        self.raise_button.setIconSize(QtCore.QSize(_btn_size - 4, _btn_size - 4))
+        self.raise_button.setToolTip("Raise all windows")
+        self.raise_button.setFixedSize(_btn_size, _btn_size)
+        self.raise_button.setStyleSheet(_icon_btn_style)
         connect_once(self.raise_button, self.bring_to_front)
 
-        # Container layout for toolbar + custom buttons
-        toolbar_container_layout = QtWidgets.QHBoxLayout()
-        toolbar_container_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_container_layout.setSpacing(0)
-        
-        if self._toolbar:
-            toolbar_container_layout.addWidget(self._toolbar) # Toolbar is ignored policy, so it shrinks
-        toolbar_container_layout.addWidget(self.raise_button) # Fixed size
-        toolbar_container_layout.addWidget(self.pause_button) # Fixed size
+        self.pause_button = QtWidgets.QPushButton(self)
+        self.pause_button.setIcon(_make_plot_toolbar_icon(_draw_plot_pause_icon))
+        self.pause_button.setIconSize(QtCore.QSize(_btn_size - 4, _btn_size - 4))
+        self.pause_button.setToolTip("Pause / Resume")
+        self.pause_button.setCheckable(True)
+        self.pause_button.setFixedSize(_btn_size, _btn_size)
+        self.pause_button.setStyleSheet(_icon_btn_style)
+
+        # -- Toolbar layout: 2 rows (all at unified _row_height) --
+        # Row 0: [matplotlib toolbar]
+        # Row 1: [coord_label (expanding)] [save] [raise] [pause]
+        self._toolbar_mode = 0
+        self._toolbar_row_widgets = []
+        for _ in range(2):
+            row_w = QtWidgets.QWidget(self)
+            row_w.setStyleSheet("background-color: #f0f0f0;")
+            row_w.setFixedHeight(_row_height)
+            row_l = QtWidgets.QHBoxLayout(row_w)
+            row_l.setContentsMargins(0, 0, 0, 0)
+            row_l.setSpacing(0)
+            self._toolbar_row_widgets.append(row_w)
+
+        # -- Frame controls row (shown only in multi-frame mode) --
+        self._frame_control_row = QtWidgets.QWidget(self)
+        self._frame_control_row.setStyleSheet("background-color: #f0f0f0;")
+        self._frame_control_row.setFixedHeight(_row_height)
+        frame_layout = QtWidgets.QHBoxLayout(self._frame_control_row)
+        frame_layout.setContentsMargins(4, 0, 4, 0)
+        frame_layout.setSpacing(6)
+
+        # Reparent frame widgets into the row container
+        self._frame_name_label.setParent(self._frame_control_row)
+        self._frame_slider.setParent(self._frame_control_row)
+        self._frame_spinbox.setParent(self._frame_control_row)
+
+        frame_layout.addWidget(self._frame_name_label)
+        frame_layout.addWidget(self._frame_slider, 1)
+        frame_layout.addWidget(self._frame_spinbox)
+
+        self._frame_slider.valueChanged.connect(self._on_frame_slider_changed)
+        self._frame_spinbox.valueChanged.connect(self._on_frame_spinbox_changed)
 
         # Add horizontal layout for the resizable label with left spacer
         self.label_container = QtWidgets.QWidget()
@@ -1347,14 +1952,26 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         label_layout.addSpacing(10)  # horizontal left spacer
         # label_layout.addStretch()  # optional: push label to the left if needed
 
-        # Now add the toolbar container as the first row
-        layout.addLayout(toolbar_container_layout)
+        # Now add the toolbar rows + title + canvas to the main layout
+        for row_w in self._toolbar_row_widgets:
+            layout.addWidget(row_w)
+        layout.addWidget(self._frame_control_row)
         self.title_spacing = 10
         layout.addSpacing(self.title_spacing)
         layout.addWidget(self.label_container)
-        layout.addWidget(self._canvas)
+        layout.addWidget(self._canvas, 1)  # stretch=1: canvas takes all extra vertical space
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        # Canvas should expand to fill available space
+        self._canvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+
+        # Initial toolbar arrangement
+        self._secondary_toolbar_row_visible = True
+        self._arrange_toolbar_widgets(force=True)
 
         # Hide title container if title is empty
         if not figure_title:
@@ -1368,9 +1985,52 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             plt.rcParams['font.family'] = prop.get_name()
 
         self._plot_objects = []
+        self._plot_objects_frames = []
+        self._current_frame_index = 0
+        self._frame_labels: list[str] = []
+        self._wheel_frame_delta_acc = 0
+        self.on_plot_json_saved: 'Optional[Callable]' = None  # callback(path): called after a plot JSON is saved
+        self.on_curve_clicked: 'Optional[Callable]' = None  # callback(curve_index): called when user clicks near a curve
+        self.on_canvas_clicked: 'Optional[Callable]' = None  # callback(x, y): called with the click position in primary-axes data coords
+        self.on_canvas_resized: 'Optional[Callable[[float, float], None]]' = None  # callback(width_px, height_px): called after user-driven canvas resize
         self._first_show_done = False  # Track if window has been shown once
-        
-        if Grid_objects is not None:
+        self._geometry_locked = False  # When True, window size and position are frozen
+
+        # --- Interactive-zoom preservation across config-driven redraws ---
+        # When the user pans/zooms with the matplotlib toolbar and then edits an
+        # unrelated setting (e.g. a curve colour), the redraw must NOT snap the
+        # view back to the auto-scaled range. We remember the axes limits each
+        # render produced so the next redraw can tell whether the user has taken
+        # manual control of the view, and keep that view unless x_lim/y_lim were
+        # explicitly changed (or the toolbar Home/Back/Forward reset it).
+        self._preserve_zoom = True
+        self._last_render_xlim = None   # primary-axes xlim at end of previous render
+        self._last_render_ylim = None   # primary-axes ylim at end of previous render
+        self._last_render_config_lim = None  # (self.x_lim, self.y_lim) snapshot at previous render
+        self._skip_preserve_zoom_once = False  # set True to force one redraw to auto-scale (e.g. an "auto range" reset)
+
+        self._fig.canvas.mpl_connect('button_press_event', self._on_mouse_click)
+
+        self.installEventFilter(self)
+        _canvas_install_event_filter = getattr(self._canvas, 'installEventFilter', None)
+        if callable(_canvas_install_event_filter):
+            _canvas_install_event_filter(self)
+        self._frame_slider.installEventFilter(self)
+        self._frame_spinbox.installEventFilter(self)
+
+        if Curve_objects_frames is not None or Grid_objects_frames is not None or Bar_objects_frames is not None:
+            self.set_plot_frames(
+                Curve_objects_frames=Curve_objects_frames,
+                Grid_objects_frames=Grid_objects_frames,
+                Bar_objects_frames=Bar_objects_frames,
+                current_frame_index=current_frame_index,
+                frame_labels=frame_labels,
+            )
+        elif Bar_objects is not None:
+            if isinstance(Bar_objects, Bar):
+                Bar_objects = [Bar_objects]
+            self.plot_objects = Bar_objects
+        elif Grid_objects is not None:
             if isinstance(Grid_objects, (Grid, Curve)):
                 Grid_objects = [Grid_objects]
             self.plot_objects = Grid_objects
@@ -1378,6 +2038,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             if isinstance(Curve_objects, (Grid, Curve)):
                 Curve_objects = [Curve_objects]
             self.plot_objects = Curve_objects if Curve_objects else []
+        
+        self._refresh_frame_controls()
 
         self._keep_front = keep_front
 
@@ -1392,6 +2054,187 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
                 self._apply_window_size_pixel()
             # self.center_the_widget()
             self.move_window()
+
+    def _normalize_single_frame(self, frame_objects):
+        if frame_objects is None:
+            return []
+        if isinstance(frame_objects, (Curve, Grid)):
+            return [frame_objects]
+        return list(frame_objects)
+
+    def _normalize_frames(self, frames_input):
+        if frames_input is None:
+            return None
+        return [self._normalize_single_frame(frame) for frame in frames_input]
+
+    def _refresh_frame_controls(self):
+        frame_count = len(self._plot_objects_frames)
+        has_frames = frame_count > 0
+        self._frame_control_row.setVisible(has_frames)
+        if not has_frames:
+            return
+
+        max_index = frame_count - 1
+        current_index = max(0, min(self._current_frame_index, max_index))
+        self._current_frame_index = current_index
+
+        self._frame_slider.blockSignals(True)
+        self._frame_spinbox.blockSignals(True)
+        self._frame_slider.setRange(0, max_index)
+        self._frame_spinbox.setRange(1, frame_count)
+        self._frame_slider.setValue(current_index)
+        self._frame_spinbox.setValue(current_index + 1)
+        self._frame_slider.blockSignals(False)
+        self._frame_spinbox.blockSignals(False)
+        if self._frame_labels and current_index < len(self._frame_labels):
+            self._frame_name_label.setText(f"{self._frame_labels[current_index]} ({current_index + 1}/{frame_count})")
+        else:
+            self._frame_name_label.setText(f"Frame {current_index + 1}/{frame_count}")
+
+    def _set_current_frame(self, index):
+        if not self._plot_objects_frames:
+            return
+        max_index = len(self._plot_objects_frames) - 1
+        index = max(0, min(int(index), max_index))
+        self._current_frame_index = index
+        self._refresh_frame_controls()
+        self.plot_objects = self._plot_objects_frames[index]
+
+    def _on_frame_slider_changed(self, value):
+        self._set_current_frame(value)
+
+    def _on_frame_spinbox_changed(self, value):
+        self._set_current_frame(value - 1)
+
+    def _step_frame_with_wheel_delta(self, delta_y, step_size=1):
+        if len(self._plot_objects_frames) <= 1:
+            return False
+        self._wheel_frame_delta_acc += int(delta_y)
+        changed = False
+        step_unit = 120
+        while abs(self._wheel_frame_delta_acc) >= step_unit:
+            direction = 1 if self._wheel_frame_delta_acc < 0 else -1
+            self._wheel_frame_delta_acc += step_unit if direction > 0 else -step_unit
+            next_index = self._current_frame_index + direction * step_size
+            clamped_index = max(0, min(next_index, len(self._plot_objects_frames) - 1))
+            if clamped_index != self._current_frame_index:
+                self._set_current_frame(clamped_index)
+                changed = True
+        return changed
+
+    def _get_slider_wheel_step(self):
+        """Return the step size for wheel events on the slider: ceil(0.5% of total frames)."""
+        import math
+        total = len(self._plot_objects_frames)
+        return max(1, math.ceil(total * 0.005))
+
+    def eventFilter(self, a0, a1):
+        if a0 is self._canvas and a1 is not None:
+            if a1.type() == QtCore.QEvent.Type.Enter:
+                self._canvas.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+                return False
+            elif a1.type() == QtCore.QEvent.Type.Leave:
+                self._canvas.unsetCursor()
+                return False
+        if self._plot_objects_frames and a1 is not None and a1.type() == QtCore.QEvent.Type.Wheel:
+            delta_getter = getattr(a1, 'angleDelta', None)
+            if callable(delta_getter):
+                delta_y = delta_getter().y()
+                # Determine step size based on which widget received the wheel event
+                if a0 is self._frame_slider:
+                    step_size = self._get_slider_wheel_step()
+                elif a0 is self._frame_spinbox:
+                    step_size = 1
+                else:
+                    step_size = 1
+                if self._step_frame_with_wheel_delta(delta_y, step_size):
+                    accept_event = getattr(a1, 'accept', None)
+                    if callable(accept_event):
+                        accept_event()
+                    return True
+        return super().eventFilter(a0, a1)
+
+    def wheelEvent(self, event):
+        if self._plot_objects_frames and self._step_frame_with_wheel_delta(event.angleDelta().y()):
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key.Key_C and event.modifiers() == QtCore.Qt.KeyboardModifier.ControlModifier:
+            buf = io.BytesIO()
+            self._fig.savefig(buf, format='png', dpi=self.copy_img_dpi)
+            buf.seek(0)
+            pixmap = QtGui.QPixmap()
+            pixmap.loadFromData(buf.read(), 'PNG')
+            QtWidgets.QApplication.clipboard().setPixmap(pixmap)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def set_plot_frames(self, Curve_objects_frames=None, Grid_objects_frames=None, Bar_objects_frames=None, current_frame_index=0, frame_labels=None):
+        curve_frames = self._normalize_frames(Curve_objects_frames)
+        grid_frames = self._normalize_frames(Grid_objects_frames)
+        bar_frames = self._normalize_frames(Bar_objects_frames)
+
+        # Collect all non-None frame lists and merge them
+        all_frame_lists = [(name, fl) for name, fl in
+                           [('Curve', curve_frames), ('Grid', grid_frames), ('Bar', bar_frames)]
+                           if fl is not None]
+
+        merged_frames = []
+        if all_frame_lists:
+            lengths = [len(fl) for _, fl in all_frame_lists]
+            if len(set(lengths)) > 1:
+                raise ValueError("All *_objects_frames must have the same frame count.")
+            n_frames = lengths[0]
+            for i in range(n_frames):
+                combined = []
+                for _, fl in all_frame_lists:
+                    combined.extend(list(fl[i]))
+                merged_frames.append(combined)
+
+        self._plot_objects_frames = merged_frames
+        self._frame_labels = list(frame_labels) if frame_labels else []
+        self._wheel_frame_delta_acc = 0
+        self._refresh_frame_controls()
+
+        if self._plot_objects_frames:
+            self._set_current_frame(current_frame_index)
+        else:
+            self.plot_objects = []
+
+    @property
+    def current_frame_index(self):
+        return self._current_frame_index
+
+    @current_frame_index.setter
+    def current_frame_index(self, index):
+        self._set_current_frame(index)
+
+    @property
+    def Curve_objects_frames(self):
+        return self._plot_objects_frames
+
+    @Curve_objects_frames.setter
+    def Curve_objects_frames(self, new_frames):
+        self.set_plot_frames(Curve_objects_frames=new_frames, current_frame_index=self._current_frame_index)
+
+    @property
+    def Grid_objects_frames(self):
+        return self._plot_objects_frames
+
+    @Grid_objects_frames.setter
+    def Grid_objects_frames(self, new_frames):
+        self.set_plot_frames(Grid_objects_frames=new_frames, current_frame_index=self._current_frame_index)
+
+    @property
+    def Bar_objects_frames(self):
+        return self._plot_objects_frames
+
+    @Bar_objects_frames.setter
+    def Bar_objects_frames(self, new_frames):
+        self.set_plot_frames(Bar_objects_frames=new_frames, current_frame_index=self._current_frame_index)
 
     #     # 关键：检测是否无人引用
     #     self._auto_pause_check()
@@ -1439,6 +2282,134 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         for window in self.comrades:
             window.activateWindow()
 
+    # ── Coordinate label helper ──
+    def _set_coord_message(self, s):
+        """Route toolbar coordinate messages to our custom label."""
+        self._coord_label.setText(s)
+
+    # ── Save button handler ──
+    def _on_save_button_clicked(self):
+        """Let user pick a PNG location, then save PNG + SVG + Plot JSON."""
+        filepath, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Plot", "", "PNG Files (*.png)"
+        )
+        if not filepath:
+            return
+        filepath = filename_replace_last_append(filepath, ".png")
+        try:
+            self.save_png(filepath)
+        except Exception as e:
+            print(f"Error saving PNG: {e}")
+        try:
+            self.save_svg(filepath)
+        except Exception as e:
+            print(f"Error saving SVG: {e}")
+        try:
+            json_path = filename_replace_last_append(filepath, ".json.Plot")
+            self.dump_to_JSON(json_path)
+            if callable(self.on_plot_json_saved):
+                self.on_plot_json_saved(os.path.abspath(json_path))
+        except Exception as e:
+            print(f"Error saving JSON: {e}")
+            
+        print(f"Saved PNG, SVG, and JSON to {filepath} (with appropriate extensions)")
+
+    # ── Toolbar layout ──
+    def set_secondary_toolbar_row_visible(self, visible: bool):
+        """Show/hide toolbar row 1 (coordinate label + save/raise/pause buttons)."""
+        self._secondary_toolbar_row_visible = bool(visible)
+        self._toolbar_row_widgets[1].setVisible(self._secondary_toolbar_row_visible)
+
+    def _arrange_toolbar_widgets(self, force=False):
+        """Place toolbar and coord-label + icon buttons into 2 fixed rows.
+
+        Layout:
+            Row 0: [matplotlib toolbar]
+            Row 1: [coord_label (expanding)]  [💾] [⬆] [⏸]
+        """
+        if self._toolbar_mode != 0 and not force:
+            return   # already arranged
+
+        self._toolbar_mode = 1  # mark as arranged
+
+        _managed = [w for w in [self._toolbar, self._coord_label,
+                                 self.save_button, self.raise_button, self.pause_button] if w]
+        for row_w in self._toolbar_row_widgets:
+            row_l = row_w.layout()
+            for w in _managed:
+                row_l.removeWidget(w)
+        for w in _managed:
+            w.setParent(self)
+
+        row_layouts = [rw.layout() for rw in self._toolbar_row_widgets]
+
+        # Row 0: toolbar (allow shrink)
+        if self._toolbar:
+            self._toolbar.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Ignored,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            self._toolbar.setMinimumWidth(0)
+            self._toolbar.setParent(self._toolbar_row_widgets[0])
+            row_layouts[0].addWidget(self._toolbar)
+
+        # Row 1: coord label + icon buttons
+        self._coord_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self._coord_label.setParent(self._toolbar_row_widgets[1])
+        row_layouts[1].addWidget(self._coord_label, 1)  # stretch=1
+        for btn in [self.save_button, self.raise_button, self.pause_button]:
+            btn.setParent(self._toolbar_row_widgets[1])
+            row_layouts[1].addWidget(btn)
+
+        self._toolbar_row_widgets[0].show()
+        self._toolbar_row_widgets[1].setVisible(
+            getattr(self, '_secondary_toolbar_row_visible', True))
+
+        # Ensure all managed widgets stay visible after reparenting
+        if self._toolbar:
+            self._toolbar.show()
+        self._coord_label.show()
+        self.save_button.show()
+        self.raise_button.show()
+        self.pause_button.show()
+
+    def resizeEvent(self, a0):
+        super().resizeEvent(a0)
+        if DEBUG_WINDOW_SIZE:
+            prog = '(programmatic)' if getattr(self, '_programmatic_resize', False) else '(user/layout)'
+            print(f"[DEBUG resizeEvent] {self.windowTitle()!r}: window={self.width()}x{self.height()} {prog}")
+        if hasattr(self, '_toolbar_mode'):
+            self._arrange_toolbar_widgets()
+        if hasattr(self, '_canvas') and not getattr(self, '_programmatic_resize', False):
+            if not hasattr(self, '_resize_timer'):
+                self._resize_timer = QtCore.QTimer(self)
+                self._resize_timer.setSingleShot(True)
+                self._resize_timer.timeout.connect(self._resize_fig_to_canvas)
+            self._resize_timer.start(80)
+
+    def _resize_fig_to_canvas(self):
+        """Update the matplotlib figure size to match the current canvas widget size."""
+        cw = self._canvas.width()
+        ch = self._canvas.height()
+        if cw < 50 or ch < 50:
+            return
+        new_w = cw / DEFAULT_FIG_DPI
+        new_h = ch / DEFAULT_FIG_DPI
+        cur_w, cur_h = self._fig.get_size_inches()
+        if abs(new_w - cur_w) < 0.05 and abs(new_h - cur_h) < 0.05:
+            return
+        self.fig_size_inch = (new_w, new_h)
+        self._fig_size_pixel = (cw, ch)
+        self._fig.set_size_inches(new_w, new_h)
+        self._canvas.draw_idle()
+        if callable(self.on_canvas_resized):
+            try:
+                self.on_canvas_resized(cw, ch)
+            except Exception:
+                pass
+
     @property
     def keep_front(self):
         return self._keep_front
@@ -1470,7 +2441,22 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         self._additional_offset_px = offset
         self.move_window()
 
+    @property
+    def geometry_locked(self):
+        """When True, window size and position are frozen.
+        
+        Used by Training_Progress_Monitor to prevent window flickering
+        during data updates and epoch browsing.
+        """
+        return getattr(self, '_geometry_locked', False)
+
+    @geometry_locked.setter
+    def geometry_locked(self, value: bool):
+        self._geometry_locked = value
+
     def move_window(self):
+        if self._geometry_locked:
+            return
         app = Global_QApplication.get_app()
         screens = app.screens()
         if len(screens) > 1:
@@ -1484,27 +2470,52 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         screen_x = screen_geometry.x()
         screen_y = screen_geometry.y()
 
-        # Calculate top-left point if centered
-        x_centered = screen_x + (screen_width - self.width()) // 2
-        y_centered = screen_y + (screen_height - self.height()) // 2
+        # Estimate window frame decoration (title bar + borders) added by the OS.
+        # On Windows 10/11: title bar ≈ 31 px, side borders ≈ 1 px each.
+        # If window is shown, use actual values; otherwise use platform defaults.
+        _fg = self.frameGeometry()
+        _cg = self.geometry()
+        _frame_extra_w = _fg.width() - _cg.width()
+        _frame_extra_h = _fg.height() - _cg.height()
+        if _frame_extra_h <= 0:
+            _frame_extra_h = 31  # Windows default title bar
+        if _frame_extra_w <= 0:
+            _frame_extra_w = 2   # minimal side borders
+
+        # Total visual size occupied by the window on screen
+        _visual_w = self.width() + _frame_extra_w
+        _visual_h = self.height() + _frame_extra_h
+
+        # Calculate top-left point if centered (use visual/frame size)
+        x_centered = screen_x + (screen_width - _visual_w) // 2
+        y_centered = screen_y + (screen_height - _visual_h) // 2
 
         # Use consistent grid spacing based on declared window size for uniform layout
-        # Even if actual window sizes vary slightly due to toolbars/frames,
-        # this ensures windows are arranged in a consistent grid pattern
+        # Grid spacing must include frame decoration so windows don't overlap.
         if self._window_size_pixel:
-            # Use declared window size for grid calculation
-            grid_width = self._window_size_pixel[0] + 15
-            grid_height = self._window_size_pixel[1] + 15
+            # Use declared window size + frame overhead for grid calculation
+            grid_width = self._window_size_pixel[0] + _frame_extra_w + 1
+            grid_height = self._window_size_pixel[1] + _frame_extra_h + 1
         else:
-            # Fallback to actual window size
-            grid_width = self.width() + 15
-            grid_height = self.height() + 15
+            # Fallback to visual size + gap
+            grid_width = _visual_w + 1
+            grid_height = _visual_h + 1
 
         new_x_position = x_centered + self.shift_window[0] * grid_width + self.additional_offset_px[0]
         new_y_position = y_centered + self.shift_window[1] * grid_height + self.additional_offset_px[1]
         if (new_x_position, new_y_position) != self.current_location:
             self.move(round(new_x_position), round(new_y_position))
             self.current_location = (new_x_position, new_y_position)
+        if DEBUG_WINDOW_SIZE:
+            print(f"[DEBUG move_window] {self.windowTitle()!r}: "
+                  f"pos=({round(new_x_position)}, {round(new_y_position)}), "
+                  f"client={self.width()}x{self.height()}, "
+                  f"frame_extra=({_frame_extra_w}, {_frame_extra_h}), "
+                  f"visual={_visual_w}x{_visual_h}, "
+                  f"shift_window={self.shift_window}, "
+                  f"grid=({grid_width}, {grid_height}), "
+                  f"additional_offset_px={self.additional_offset_px}, "
+                  f"screen=({screen_x}, {screen_y}, {screen_width}x{screen_height})")
         
 
     def _detect_device_pixel_ratio(self):
@@ -1555,6 +2566,56 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         fig_height = ax_height + 1.2
         self._fig.set_size_inches(fig_width, fig_height)
 
+    def _apply_size_before_draw(self):
+        """Ensure figure is at the correct size BEFORE axes content is drawn.
+
+        This is critical for animation / frame-switching: the figure must
+        already be at the final size when content is rendered so that the
+        user never sees a briefly mis-sized frame.
+
+        Called at the start of ``_update_plot``.
+        """
+        if self._geometry_locked:
+            # Geometry is frozen — just sync figure to current canvas without
+            # touching the window size or position.
+            cw = self._canvas.width()
+            ch = self._canvas.height()
+            if cw >= 50 and ch >= 50:
+                new_w = cw / DEFAULT_FIG_DPI
+                new_h = ch / DEFAULT_FIG_DPI
+                self.fig_size_inch = (new_w, new_h)
+                self._fig_size_pixel = (cw, ch)
+                self._fig.set_size_inches(new_w, new_h)
+            return
+        if self._size_mode == 'window' and self._window_size_pixel is not None:
+            # Window mode: window size is authoritative.
+            # The correct total window height = window_size_pixel[1] + overhead.
+            # Use _apply_window_size_pixel() which already accounts for overhead,
+            # instead of setFixedSize(window_w, window_h) which ignores it.
+            window_w, window_h = self._window_size_pixel
+            overhead = self._get_non_canvas_overhead_height()
+            expected_h = window_h + overhead
+            if self.width() != window_w or self.height() != expected_h:
+                self._apply_window_size_pixel()
+
+            cw = self._canvas.width()
+            ch = self._canvas.height()
+            if cw >= 50 and ch >= 50:
+                new_w = cw / DEFAULT_FIG_DPI
+                new_h = ch / DEFAULT_FIG_DPI
+                self.fig_size_inch = (new_w, new_h)
+                self._fig_size_pixel = (cw, ch)
+                self._fig.set_size_inches(new_w, new_h)
+        else:
+            # fig_size_inch / fig_size_pixel modes:
+            # Use the cached calibrated figure size when available so the
+            # very first draw of each frame is already at the correct size.
+            cache_key = (self._fig_size_pixel, self.font_size)
+            if self._cached_fig_inches is not None and self._cached_fig_inches_key == cache_key:
+                self._fig.set_size_inches(*self._cached_fig_inches)
+            else:
+                self._setup_figure_size()
+
     def _enforce_axes_size(self):
         """After plotting with constrained_layout, resize the Figure so that
         the axes area matches the target size (self.fig_size_inch)."""
@@ -1579,7 +2640,24 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         
         This should be called after any operation that changes fig_size_inch,
         font_size, or after _update_plot to keep window and figure in sync.
+        
+        If window_size_pixel is set, the window size is externally managed:
+        re-apply that fixed size (so the canvas fills it) and return early
+        instead of shrinking the window to match the figure's natural size.
         """
+        if self._geometry_locked:
+            return
+        if self._window_size_pixel is not None:
+            if DEBUG_WINDOW_SIZE:
+                print(f"[DEBUG resize_window_to_fig] {self.windowTitle()!r}: "
+                      f"window_size_pixel={self._window_size_pixel} set — "
+                      f"re-applying fixed size, window_before={self.width()}x{self.height()}")
+            self._apply_window_size_pixel()
+            if DEBUG_WINDOW_SIZE:
+                print(f"[DEBUG resize_window_to_fig] {self.windowTitle()!r}: "
+                      f"window_after={self.width()}x{self.height()}")
+            return
+
         fig_w, fig_h = self._fig.get_size_inches()
         
         # Use DEFAULT_FIG_DPI for logical pixel conversion.
@@ -1589,7 +2667,13 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         canvas_w = int(fig_w * DEFAULT_FIG_DPI)
         canvas_h = int(fig_h * DEFAULT_FIG_DPI)
 
+        if DEBUG_WINDOW_SIZE:
+            print(f"[DEBUG resize_window_to_fig] {self.windowTitle()!r}: "
+                  f"fig={fig_w:.3f}x{fig_h:.3f}in  canvas_target={canvas_w}x{canvas_h}px  "
+                  f"window_before={self.width()}x{self.height()}")
+
         # Fix the canvas to exactly this pixel size so Qt layout doesn't stretch it
+        self._programmatic_resize = True
         self._canvas.setFixedSize(canvas_w, canvas_h)
 
         # Let the layout compute the total required size, then resize to that
@@ -1598,27 +2682,84 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         # Release the fixed constraint so the user can still manually resize
         self._canvas.setMinimumSize(0, 0)
         self._canvas.setMaximumSize(16777215, 16777215)
+        self._canvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self._programmatic_resize = False
+
+        if DEBUG_WINDOW_SIZE:
+            print(f"[DEBUG resize_window_to_fig] {self.windowTitle()!r}: "
+                  f"window_after={self.width()}x{self.height()}")
+
+    def _get_non_canvas_overhead_height(self):
+        """Calculate the total height of all non-canvas widgets above the canvas
+        (toolbar rows, frame control row, title spacing, and title label).
+        """
+        overhead = 0
+        # Visible toolbar rows
+        for row_w in self._toolbar_row_widgets:
+            if row_w.isVisible():
+                overhead += row_w.height() if row_w.height() > 0 else row_w.sizeHint().height()
+        # Frame control row
+        if self._frame_control_row.isVisible():
+            overhead += self._frame_control_row.height() if self._frame_control_row.height() > 0 else self._frame_control_row.sizeHint().height()
+        # Title spacing + title label
+        if self.label_container.isVisible():
+            overhead += self.title_spacing
+            overhead += self.label_container.height() if self.label_container.height() > 0 else self.label_container.sizeHint().height()
+        return overhead
 
     def _apply_window_size_pixel(self):
-        """Apply window_size_pixel by setting the window to a fixed size.
+        """Apply window_size_pixel by setting the window to a fixed size,
+        then resize the matplotlib figure to fill the actual canvas area.
         
-        This makes the Qt widget window exactly match the specified size,
-        and the figure/canvas automatically fills the available space.
+        window_size_pixel specifies the desired size EXCLUDING the toolbar/menu
+        rows.  The actual Qt window size is enlarged by the height of visible
+        toolbar rows, frame-control row, title spacing, and title label so that
+        the canvas area matches the user-specified dimensions.
         """
+        if self._geometry_locked:
+            return
         if self._window_size_pixel is None:
             return
         
         window_w, window_h = self._window_size_pixel
+
+        # Account for non-canvas overhead (toolbar rows, frame bar, title)
+        overhead = self._get_non_canvas_overhead_height()
+        actual_h = window_h + overhead
         
         # Set fixed size for the entire window
-        self.setFixedSize(window_w, window_h)
+        self._programmatic_resize = True
+        self.setFixedSize(window_w, actual_h)
         
-        # Process events to ensure layout updates
+        # Process events so the layout computes the actual canvas area
         QtWidgets.QApplication.processEvents()
         
+        # Sync the matplotlib figure to whatever canvas area is now available
+        cw = self._canvas.width()
+        ch = self._canvas.height()
+        new_w = new_h = None
+        if cw >= 50 and ch >= 50:
+            new_w = cw / DEFAULT_FIG_DPI
+            new_h = ch / DEFAULT_FIG_DPI
+            self.fig_size_inch = (new_w, new_h)
+            self._fig_size_pixel = (cw, ch)
+            self._fig.set_size_inches(new_w, new_h)
+            self._canvas.draw_idle()
+            QtWidgets.QApplication.processEvents()
+
+        if DEBUG_WINDOW_SIZE:
+            print(f"[DEBUG _apply_window_size_pixel] {self.windowTitle()!r}: "
+                  f"requested={window_w}x{window_h}  overhead={overhead}  actual_window={window_w}x{actual_h}  "
+                  f"canvas={cw}x{ch}  fig set to {new_w:.3f}x{new_h:.3f}in" if new_w else
+                  f"[DEBUG _apply_window_size_pixel] {self.windowTitle()!r}: canvas too small ({cw}x{ch}), skipped")
+
         # Release fixed constraint so user can manually resize if needed
         self.setMinimumSize(0, 0)
         self.setMaximumSize(16777215, 16777215)
+        self._programmatic_resize = False
 
     @property
     def plot_objects(self):
@@ -1626,10 +2767,12 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
     @plot_objects.setter
     def plot_objects(self, new_objects):
-        if isinstance(new_objects, (Curve, Grid)):
+        if isinstance(new_objects, (Curve, Grid, Bar)):
             self._plot_objects = [new_objects]
         else:
             self._plot_objects = list(new_objects)
+        if self._plot_objects_frames and 0 <= self._current_frame_index < len(self._plot_objects_frames):
+            self._plot_objects_frames[self._current_frame_index] = list(self._plot_objects)
         self._update_plot()
         self.move_window()
 
@@ -1650,6 +2793,65 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
     @Grid_objects.setter
     def Grid_objects(self, new_objects):
         self.plot_objects = new_objects
+
+    @property
+    def Bar_objects(self):
+        return self._plot_objects
+
+    @Bar_objects.setter
+    def Bar_objects(self, new_objects):
+        self.plot_objects = new_objects
+
+    # ── Size setter methods (mutually exclusive) ──
+
+    def set_fig_size_inch(self, width_inch, height_inch):
+        """Set the axes area size in inches.
+
+        Overrides any previous fig_size_pixel or window_size_pixel setting.
+        Only one sizing mode is active at a time.
+        """
+        self._size_mode = 'inch'
+        self._window_size_pixel = None
+        self._fig_size_pixel = (width_inch * DEFAULT_FIG_DPI, height_inch * DEFAULT_FIG_DPI)
+        self._cached_fig_inches = None
+        self._cached_fig_inches_key = None
+        self._setup_figure_size()
+        if self._plot_objects:
+            self._update_plot()
+            self.move_window()
+
+    def set_fig_size_pixel(self, width_px, height_px):
+        """Set the axes area size in pixels.
+
+        Overrides any previous fig_size_inch or window_size_pixel setting.
+        Only one sizing mode is active at a time.
+        """
+        self._size_mode = 'pixel'
+        self._window_size_pixel = None
+        self._fig_size_pixel = (width_px, height_px)
+        self._cached_fig_inches = None
+        self._cached_fig_inches_key = None
+        self._setup_figure_size()
+        if self._plot_objects:
+            self._update_plot()
+            self.move_window()
+
+    def set_window_size_pixel(self, width_px, height_px):
+        """Set the total window size in pixels.  The figure fills the
+        available canvas area.
+
+        Overrides any previous fig_size_inch or fig_size_pixel setting.
+        Only one sizing mode is active at a time.
+        """
+        self._size_mode = 'window'
+        self._window_size_pixel = (width_px, height_px)
+        self._cached_fig_inches = None
+        self._cached_fig_inches_key = None
+        # Apply window size immediately so the canvas takes the right area
+        self._apply_window_size_pixel()
+        if self._plot_objects:
+            self._update_plot()
+            self.move_window()
 
     def set_figure_title(self, title):
         self.current_title = str(title)
@@ -1693,7 +2895,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         # If pause button is checked, do not update the data portion
 
         if not self._plot_objects:
-            self.hide()
+            if not self._geometry_locked:
+                self.hide()
             return
         else:
             if not self.isVisible():
@@ -1702,34 +2905,227 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         while self.pause_button.isChecked():
             self.pause(0.05)
 
-        plt.rcParams.update({'font.size': self.font_size, 'font.family': 'arial', 'mathtext.default': 'regular'})
+        plt.rcParams.update({'font.size': self.font_size,
+                             'font.family': ['arial'] + CJK_FALLBACK_FONTS,
+                             'mathtext.default': 'regular'})
+
+        # Ensure figure is at the correct size BEFORE drawing content.
+        # This is critical for animation / frame-switching: rendering at the
+        # final size avoids visible resize flicker.
+        self._apply_size_before_draw()
+
+        # Decide whether the user's current interactive zoom/pan should survive
+        # this redraw — captured BEFORE clear() wipes the axes limits.
+        preserved_view = self._capture_view_to_preserve()
 
         self._ax.clear()
 
+        # Re-apply custom format_coord after clear() resets it
+        if hasattr(self, '_custom_format_coord'):
+            self._ax.format_coord = self._custom_format_coord
+
+        # Drop any stale heatmap descriptor so the cursor readout falls back to
+        # (x, y) until _update_plot_grid republishes a heatmap on this redraw.
+        self._heatmap_lookup = None
+
         # Check mode based on the first object
         first_obj = self._plot_objects[0]
-        if isinstance(first_obj, Grid):
+        if isinstance(first_obj, Bar):
+            self._update_plot_bar()
+        elif isinstance(first_obj, Grid):
             self._update_plot_grid()
         else:
             self._update_plot_curve()
+
+        # Restore the user's interactive view (if any) and record the limits this
+        # render settled on, as the baseline for the next redraw's navigation check.
+        self._apply_preserved_view(preserved_view)
+
+    @staticmethod
+    def _lims_close(a, b, rtol=1e-9, atol=1e-12):
+        """True if two (lo, hi) limit tuples are equal within float tolerance."""
+        if a is None or b is None:
+            return a is b
+        return (abs(a[0] - b[0]) <= atol + rtol * abs(b[0]) and
+                abs(a[1] - b[1]) <= atol + rtol * abs(b[1]))
+
+    def _capture_view_to_preserve(self):
+        """Return (xlim, ylim) of the user's current interactive view if it should
+        survive the imminent redraw, else None.
+
+        Preserve only when ALL hold:
+          * preservation is enabled and a previous render exists (not first draw);
+          * the configured x_lim/y_lim are unchanged — an explicit X_Lim/Y_Lim edit
+            (or percentage_zoom_Y) means the user *wants* a new range;
+          * the current axes view differs from what the previous render produced,
+            i.e. the user panned/zoomed manually since then.
+
+        Toolbar Home/Back/Forward restore limits directly on the axes without going
+        through _update_plot, so those resets are unaffected by this logic.
+        """
+        if getattr(self, '_skip_preserve_zoom_once', False):
+            self._skip_preserve_zoom_once = False
+            return None  # caller explicitly asked this redraw to auto-scale
+        if not getattr(self, '_preserve_zoom', True):
+            return None
+        if self._last_render_xlim is None:
+            return None  # first render — nothing to preserve
+        if (self.x_lim, self.y_lim) != self._last_render_config_lim:
+            return None  # x_lim/y_lim changed explicitly — honour the new range
+        cur_xlim = self._ax.get_xlim()
+        cur_ylim = self._ax.get_ylim()
+        if (self._lims_close(cur_xlim, self._last_render_xlim) and
+                self._lims_close(cur_ylim, self._last_render_ylim)):
+            return None  # view matches last render — user has not navigated
+        return (cur_xlim, cur_ylim)
+
+    def _apply_preserved_view(self, preserved_view):
+        """Re-apply a preserved interactive view (if any) and remember the axes
+        limits this render ended on for the next redraw's navigation check."""
+        if preserved_view is not None:
+            self._ax.set_xlim(preserved_view[0])
+            self._ax.set_ylim(preserved_view[1])
+            self._canvas.draw_idle()
+        self._last_render_xlim = self._ax.get_xlim()
+        self._last_render_ylim = self._ax.get_ylim()
+        self._last_render_config_lim = (self.x_lim, self.y_lim)
+
+    def _update_plot_bar(self):
+        """Render bar chart(s) from Bar objects in ``self._plot_objects``."""
+        legend_handles = []
+
+        for bar_obj in self._plot_objects:
+            if not isinstance(bar_obj, Bar):
+                continue
+
+            order = bar_obj._resolved_order()
+            n = len(order)
+            categories = [bar_obj.categories[i] for i in order]
+            values = [bar_obj.values[i] for i in order]
+            colors = bar_obj._resolved_colors(len(bar_obj.categories))
+            colors = [colors[i] for i in order]
+
+            positions = list(range(n))
+            is_horizontal = bar_obj.orientation == 'horizontal'
+
+            bar_func = self._ax.barh if is_horizontal else self._ax.bar
+
+            bar_kwargs = dict(
+                color=colors,
+                alpha=bar_obj.alpha,
+                edgecolor=bar_obj.edge_color,
+                linewidth=bar_obj.edge_width,
+                hatch=bar_obj.hatch,
+                zorder=2,
+            )
+            if is_horizontal:
+                bar_kwargs['height'] = bar_obj.bar_width
+            else:
+                bar_kwargs['width'] = bar_obj.bar_width
+
+            bars = bar_func(positions, values, **bar_kwargs)
+
+            # Value labels
+            if bar_obj.show_value_labels:
+                label_fs = bar_obj.value_label_fontsize if bar_obj.value_label_fontsize is not None else max(self.font_size - 2, 5)
+                for idx, (pos, val, cat) in enumerate(zip(positions, values, categories)):
+                    is_highlighted = cat in bar_obj.highlight
+                    weight = 'bold' if (is_highlighted and bar_obj.highlight_bold_value) else 'normal'
+                    label_text = bar_obj.value_label_format.format(val)
+
+                    if is_horizontal:
+                        offset = bar_obj.value_label_offset if bar_obj.value_label_offset is not None else max(abs(val) * 0.02, 0.3)
+                        self._ax.text(
+                            val + offset, pos, label_text,
+                            ha='left', va='center',
+                            fontsize=label_fs, color=bar_obj.value_label_color, fontweight=weight,
+                        )
+                    else:
+                        offset = bar_obj.value_label_offset if bar_obj.value_label_offset is not None else max(abs(val) * 0.02, 0.3)
+                        self._ax.text(
+                            pos, val + offset, label_text,
+                            ha='center', va='bottom',
+                            fontsize=label_fs, color=bar_obj.value_label_color, fontweight=weight,
+                        )
+
+            # Tick labels
+            if is_horizontal:
+                self._ax.set_yticks(positions)
+                self._ax.set_yticklabels(categories)
+            else:
+                self._ax.set_xticks(positions)
+                tick_labels = self._ax.set_xticklabels(categories, rotation=45, ha='right')
+                # Bold highlighted tick labels
+                if bar_obj.highlight and bar_obj.highlight_bold_label:
+                    for label in tick_labels:
+                        if label.get_text() in bar_obj.highlight:
+                            label.set_fontweight('bold')
+
+            # Subtle y-axis grid for readability
+            grid_axis = 'x' if is_horizontal else 'y'
+            self._ax.grid(axis=grid_axis, alpha=0.2, linestyle='-', linewidth=0.5, zorder=0)
+            self._ax.tick_params(axis=grid_axis, direction='in')
+
+            # Clean spines
+            self._ax.spines['top'].set_visible(True)
+            self._ax.spines['right'].set_visible(True)
+            self._ax.spines['left'].set_linewidth(0.8)
+            self._ax.spines['bottom'].set_linewidth(0.8)
+            self._ax.spines['top'].set_linewidth(0.8)
+            self._ax.spines['right'].set_linewidth(0.8)
+
+            # Legend entry
+            if bar_obj.Y_label:
+                from matplotlib.patches import Patch
+                dominant_color = colors[0] if colors else '#333333'
+                legend_handles.append(Patch(facecolor=dominant_color, edgecolor=bar_obj.edge_color,
+                                            label=bar_obj.Y_label, alpha=bar_obj.alpha))
+
+        # Legend
+        if self.plot_legend and legend_handles:
+            effective_legend_font_size = self.legend_font_size if self.legend_font_size else self.font_size
+            leg = self._ax.legend(handles=legend_handles, fontsize=effective_legend_font_size)
+            if leg is not None:
+                # Exclude the legend from constrained_layout so an over-long
+                # legend doesn't shrink the axes when the window narrows.
+                # (PNG export with bbox_inches='tight' still includes it.)
+                leg.set_in_layout(False)
+                leg.set_draggable(True)
+
+        self._finalize_plot_settings()
 
     def _update_plot_grid(self):
         for curve in self._plot_objects:
             if not isinstance(curve, Grid): continue
 
             grid_x, grid_y, grid_z_mesh, grid_z_contour = curve.get_grid_data()
-            mesh_plot = None 
-            if grid_z_mesh is not None:
+            mesh_plot = None
+            if grid_z_mesh is not None and getattr(curve, 'show_heatmap', True):
                 cmap_info = curve.get_colormap()
-                
+
                 if cmap_info is not None:
                      cmap, vmin, vmax = cmap_info
                      mesh_plot = self._ax.pcolormesh(grid_x, grid_y, grid_z_mesh, cmap=cmap, vmin=vmin, vmax=vmax, shading='auto', zorder=1)
                 else:
                      mesh_plot = self._ax.pcolormesh(grid_x, grid_y, grid_z_mesh, shading='auto', zorder=1)
-                
+
                 if curve.show_colorbar and mesh_plot:
                     self._fig.colorbar(mesh_plot, ax=self._ax)
+
+                # Remember the front-most heatmap for the (x, y, z) cursor readout.
+                # First Grid that draws a heatmap wins; subsequent layers (e.g. a
+                # contour-only overlay) will not have a heatmap to publish.
+                if self._heatmap_lookup is None:
+                    try:
+                        gx_1d = grid_x[0, :]
+                        gy_1d = grid_y[:, 0]
+                        self._heatmap_lookup = {
+                            'grid_x_1d': np.asarray(gx_1d),
+                            'grid_y_1d': np.asarray(gy_1d),
+                            'grid_z':    np.asarray(grid_z_mesh),
+                        }
+                    except Exception:
+                        self._heatmap_lookup = None
 
             if curve.show_contour and grid_z_contour is not None:
                 levels = curve.contour_values if curve.contour_values is not None else curve.contour_levels
@@ -1847,32 +3243,59 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
             # Plot dots
             if curve.plot_dot:
+                # Determine effective alpha (default 0.7)
+                effective_alpha = curve.dot_alpha if curve.dot_alpha is not None else 0.7
+
                 # Check if it's "HOLLOW"
                 if "_HOLLOW" in curve.dot_format:
                     marker_face_color = 'none'
                 else:
-                    marker_face_color = curve.dot_color
-                marker_edge_color = curve.dot_color
+                    # Face color with dot_alpha
+                    if curve.dot_color:
+                        face_rgba = list(mcolors.to_rgba(curve.dot_color))
+                        face_rgba[3] = effective_alpha
+                        marker_face_color = tuple(face_rgba)
+                    else:
+                        marker_face_color = None
+
+                # Edge color: use dot_edge_color if specified, otherwise dot_color at full opacity
+                if curve.dot_edge_color is not None:
+                    marker_edge_color = curve.dot_edge_color
+                else:
+                    marker_edge_color = curve.dot_color
+
+                plot_kwargs = dict(
+                    markerfacecolor=marker_face_color,
+                    markeredgecolor=marker_edge_color,
+                    markersize=curve.dot_width,
+                )
+                if curve.dot_edge_width is not None:
+                    plot_kwargs['markeredgewidth'] = curve.dot_edge_width
                 self._ax.plot(
                     X, Y,
                     curve.dot_format.replace('_HOLLOW', ""),
-                    markerfacecolor=marker_face_color,
-                    markeredgecolor=marker_edge_color,
-                    markersize=curve.dot_width
+                    **plot_kwargs
                 )
 
             # Optional legend entry
             if curve.Y_label:
+                effective_alpha = curve.dot_alpha if curve.dot_alpha is not None else 0.7
                 if "_HOLLOW" in curve.dot_format:
                     marker_face_color = 'none'
                 else:
-                    marker_face_color = curve.dot_color
-                marker_edge_color = curve.dot_color
+                    if curve.dot_color:
+                        face_rgba = list(mcolors.to_rgba(curve.dot_color))
+                        face_rgba[3] = effective_alpha
+                        marker_face_color = tuple(face_rgba)
+                    else:
+                        marker_face_color = curve.dot_color
+                if curve.dot_edge_color is not None:
+                    marker_edge_color = curve.dot_edge_color
+                else:
+                    marker_edge_color = curve.dot_color
 
                 # Create an "empty" plot just for the legend handle
-                legend_line = self._ax.plot(
-                    [],
-                    [],
+                legend_kwargs = dict(
                     linestyle=curve.curve_legend_format if curve.curve_legend_format else curve.curve_format,
                     marker=curve.dot_format.replace('_HOLLOW', ""),
                     markersize=curve.dot_width,
@@ -1880,20 +3303,28 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
                     markerfacecolor=marker_face_color,
                     markeredgecolor=marker_edge_color,
                     color=curve.curve_legend_color if curve.curve_legend_color else curve.curve_color,
-                    linewidth=curve.curve_width
+                    linewidth=curve.curve_width,
+                )
+                if curve.dot_edge_width is not None:
+                    legend_kwargs['markeredgewidth'] = curve.dot_edge_width
+                legend_line = self._ax.plot(
+                    [],
+                    [],
+                    **legend_kwargs
                 )
                 legend_handles.append(legend_line)
 
             # Error bars
-            if curve.Y_error_bar:
+            if curve.Y_errorbar:
+                capsize = getattr(curve, 'errorbar_capsize', 2)
                 self._ax.errorbar(
-                    X, Y, curve.Y_error_bar,
+                    X, Y, curve.Y_errorbar,
                     fmt='o',
                     ecolor=curve.dot_color,
                     markersize=0,
                     elinewidth=curve.curve_width,
                     capthick=curve.curve_width,
-                    capsize=2
+                    capsize=capsize
                 )
 
             # Fill between curve and Y=0
@@ -1903,7 +3334,13 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         # Legend
         if self.plot_legend and legend_handles:
             effective_legend_font_size = self.legend_font_size if self.legend_font_size else self.font_size
-            self._ax.legend(fontsize=effective_legend_font_size)
+            leg = self._ax.legend(fontsize=effective_legend_font_size)
+            if leg is not None:
+                # Exclude the legend from constrained_layout so an over-long
+                # legend doesn't shrink the axes when the window narrows.
+                # (PNG export with bbox_inches='tight' still includes it.)
+                leg.set_in_layout(False)
+                leg.set_draggable(True)
 
         self._finalize_plot_settings()
 
@@ -1917,6 +3354,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         fill_color = curve.fill_color
         if fill_color is None:
             return
+        fill_alpha = curve.fill_alpha
 
         # Use interpolated data if available for smoother fill
         if curve.do_interpolation and curve.plot_curve:
@@ -1940,18 +3378,18 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
 
                 if isinstance(color_spec, tuple) and len(color_spec) == 2:
                     # Two-color HSV interpolation
-                    self._fill_with_hsv_gradient(section_X, section_Y, color_spec[0], color_spec[1])
+                    self._fill_with_hsv_gradient(section_X, section_Y, color_spec[0], color_spec[1], fill_alpha)
                 elif isinstance(color_spec, str) and color_spec in GRADIENT_COLORMAPS:
                     # Matplotlib colormap gradient
-                    self._fill_with_cmap_gradient(section_X, section_Y, color_spec, x_start, x_end)
+                    self._fill_with_cmap_gradient(section_X, section_Y, color_spec, x_start, x_end, fill_alpha)
                 else:
                     # Single color
-                    self._ax.fill_between(section_X, 0, section_Y, color=color_spec, alpha=0.3)
+                    self._ax.fill_between(section_X, 0, section_Y, color=color_spec, alpha=fill_alpha)
         else:
             # Simple single-color fill
-            self._ax.fill_between(fill_X, 0, fill_Y, color=fill_color, alpha=0.3)
+            self._ax.fill_between(fill_X, 0, fill_Y, color=fill_color, alpha=fill_alpha)
 
-    def _fill_with_cmap_gradient(self, X, Y, cmap_name, x_start, x_end):
+    def _fill_with_cmap_gradient(self, X, Y, cmap_name, x_start, x_end, fill_alpha=0.3):
         """Fill with a matplotlib colormap gradient, column by column."""
         import matplotlib.cm as mcm
         cmap = mcm.get_cmap(cmap_name)
@@ -1961,9 +3399,9 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         for i in range(n - 1):
             t = (X[i] - x_start) / (x_end - x_start) if x_end != x_start else 0
             color = cmap(np.clip(t, 0, 1))
-            self._ax.fill_between(X[i:i+2], 0, Y[i:i+2], color=color, alpha=0.3, linewidth=0)
+            self._ax.fill_between(X[i:i+2], 0, Y[i:i+2], color=color, alpha=fill_alpha, linewidth=0)
 
-    def _fill_with_hsv_gradient(self, X, Y, color1, color2):
+    def _fill_with_hsv_gradient(self, X, Y, color1, color2, fill_alpha=0.3):
         """Fill with HSV-interpolated gradient between two colors."""
         import matplotlib.colors as mcolors
         c1_hsv = np.array(mcolors.rgb_to_hsv(mcolors.to_rgb(color1)))
@@ -1975,7 +3413,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             t = i / max(n - 2, 1)
             hsv = c1_hsv * (1 - t) + c2_hsv * t
             color = mcolors.hsv_to_rgb(hsv)
-            self._ax.fill_between(X[i:i+2], 0, Y[i:i+2], color=color, alpha=0.3, linewidth=0)
+            self._ax.fill_between(X[i:i+2], 0, Y[i:i+2], color=color, alpha=fill_alpha, linewidth=0)
 
     def _finalize_plot_settings(self):
         # Apply log scales
@@ -2024,19 +3462,127 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             if top is not None:
                 self._ax.set_ylim(top=top)
 
-        # Connect events (e.g. mouse click)
-        self._fig.canvas.mpl_connect('button_press_event', on_mouse_click)
+        # (mouse click event is connected once in __init__)
 
-        # Enforce axes size after constrained_layout adjustments
-        self._enforce_axes_size()
+        if self._size_mode == 'window' or self._geometry_locked:
+            # Window mode or geometry locked: figure already sized to match
+            # canvas in _apply_size_before_draw.
+            # Skip _enforce_axes_size (axes fill whatever constrained_layout gives).
+            # Skip resize_window_to_fig (window size is externally fixed).
+            self._canvas.draw()
+        else:
+            # fig_size_inch / fig_size_pixel modes
+            cache_key = (self._fig_size_pixel, self.font_size)
+            if self._cached_fig_inches is not None and self._cached_fig_inches_key == cache_key:
+                # Cached: figure already at calibrated size from _apply_size_before_draw
+                self._canvas.draw()
+            else:
+                # First render or params changed: calibrate via _enforce_axes_size
+                self._enforce_axes_size()
+                self._canvas.draw()
+                # Cache the calibrated figure size for next frame
+                self._cached_fig_inches = tuple(self._fig.get_size_inches())
+                self._cached_fig_inches_key = cache_key
 
-        self._canvas.draw()
+            if DEBUG_WINDOW_SIZE:
+                print(f"[DEBUG _finalize_plot_settings] {self.windowTitle()!r}: canvas draw done, "
+                      f"window={self.width()}x{self.height()} — calling resize_window_to_fig …")
+            self.resize_window_to_fig()
+            if DEBUG_WINDOW_SIZE:
+                print(f"[DEBUG _finalize_plot_settings] {self.windowTitle()!r}: after resize_window_to_fig, "
+                      f"window={self.width()}x{self.height()}")
 
         if self.save_img_filepath:
             self._fig.savefig(self.save_img_filepath, dpi=self.save_img_dpi)
 
-        self.resize_window_to_fig()
         update_UI()
+
+    def _on_mouse_click(self, event):
+        """Handle mouse click on the plot canvas — find the nearest curve and invoke callback."""
+        # Only respond to left-click within the axes
+        if event.button != 1 or event.inaxes is None or event.xdata is None:
+            return
+        # Skip when toolbar pan/zoom is active
+        if self._toolbar and self._toolbar.mode:
+            return
+
+        # Report the click position (in primary-axes data coords) to any listener.
+        # Computed from pixel coords so it stays correct even when the click lands
+        # on a twin axis / colorbar rather than the primary axes.
+        if callable(self.on_canvas_clicked):
+            try:
+                inv = self._ax.transData.inverted()
+                x_data, y_data = inv.transform((event.x, event.y))
+                # Data-units spanned by one screen pixel at the click location.
+                # Evaluated locally so it stays correct on log axes too.
+                x_data_dx, _ = inv.transform((event.x + 1, event.y))
+                _, y_data_dy = inv.transform((event.x, event.y + 1))
+                x_per_pixel = abs(float(x_data_dx) - float(x_data))
+                y_per_pixel = abs(float(y_data_dy) - float(y_data))
+                self.on_canvas_clicked(float(x_data), float(y_data),
+                                       x_per_pixel, y_per_pixel)
+            except Exception:
+                pass
+
+        # Only act when a callback is registered (i.e. Plot Editor is driving this)
+        if not callable(self.on_curve_clicked):
+            return
+        # Only handle Curve objects (not Grid)
+        curves = [(i, obj) for i, obj in enumerate(self._plot_objects) if isinstance(obj, Curve)]
+        if not curves:
+            return
+
+        # Convert click position to display (pixel) coords for scale-invariant distance
+        click_disp = self._ax.transData.transform((event.xdata, event.ydata))
+
+        # Determine whether ANY visible curve has dots shown
+        any_dots = any(c.plot_dot for _, c in curves)
+
+        best_idx = None
+        best_distance = float('inf')
+
+        if any_dots:
+            # Find nearest data point across all curves that show dots
+            for idx, curve in curves:
+                if not curve.plot_dot:
+                    continue
+                if len(curve.Xs) == 0:
+                    continue
+                pts_data = np.column_stack((curve.Xs, curve.Ys))
+                pts_disp = self._ax.transData.transform(pts_data)
+                distances = np.sqrt(np.sum((pts_disp - click_disp) ** 2, axis=1))
+                minimum_distance = np.min(distances)
+                if minimum_distance < best_distance:
+                    best_distance = minimum_distance
+                    best_idx = idx
+        else:
+            # Find nearest curve (using rendered line points)
+            for idx, curve in curves:
+                if not curve.plot_curve:
+                    continue
+                if len(curve.Xs) == 0:
+                    continue
+                # Use the rendered line points (interpolated or raw)
+                if curve.do_interpolation:
+                    if curve.interpolation_xs is not None:
+                        line_X = curve.interpolation_xs
+                        line_Y = curve.interp1d(line_X)
+                    else:
+                        line_X = np.linspace(min(curve.Xs), max(curve.Xs), min(500, curve.interpolation_number))
+                        line_Y = curve.interp1d(line_X)
+                else:
+                    line_X = np.asarray(curve.Xs)
+                    line_Y = np.asarray(curve.Ys)
+                pts_data = np.column_stack((line_X, line_Y))
+                pts_disp = self._ax.transData.transform(pts_data)
+                distances = np.sqrt(np.sum((pts_disp - click_disp) ** 2, axis=1))
+                minimum_distance = np.min(distances)
+                if minimum_distance < best_distance:
+                    best_distance = minimum_distance
+                    best_idx = idx
+
+        if best_idx is not None:
+            self.on_curve_clicked(best_idx)
 
     def save_csv(self, output_filename):
         """
@@ -2097,7 +3643,7 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             if plot_history_folder not in self.log_filenames:
                 os.makedirs(plot_history_folder, exist_ok=True)
                 base_log_filename = filename_name(output_filename)
-                base_log_filename = f"0_Plot_Infos_{replace_last_append(base_log_filename, "txt")}"
+                base_log_filename = f"0_Plot_Infos_{replace_last_append(base_log_filename, 'txt')}"
                 base_log = get_unused_filename(os.path.join(plot_history_folder, base_log_filename))
                 self.log_filenames[plot_history_folder] = base_log
             
@@ -2107,7 +3653,8 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
                 f.write(f"{log_file}\tPlot Title\t{self.current_title}\n")
 
 
-    def save_png(self, output_filename, dpi=None, bbox_inches:Optional[str]="tight", save_plot_history = True):
+    def save_png(self, output_filename, dpi=None, bbox_inches:Optional[str]="tight", save_plot_history = True,
+                 transparent=None, facecolor=None):
         """
         Save the current plot as a PNG file.
         Also saves the numerical data of the curves to a CSV file in a 'Numeric_Plot_Data' subfolder.
@@ -2116,16 +3663,30 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         :param output_filename: The path to save the PNG file.
         :param dpi: The resolution in dots per inch. If None, uses self.save_img_dpi.
         :param bbox_inches: Bounding box in inches: 'tight' or None.
+        :param transparent: If None, defaults to True when no background color is configured
+            (self.save_bg_color), otherwise False.
+        :param facecolor: Background color for the saved figure. If None and self.save_bg_color is set,
+            uses self.save_bg_color.
         """
         dpi = dpi or self.save_img_dpi
         output_filename = filename_replace_last_append(output_filename, ".png")
-        self._fig.savefig(output_filename, dpi=dpi, bbox_inches=bbox_inches)
+
+        if facecolor is None and self.save_bg_color:
+            facecolor = self.save_bg_color
+        if transparent is None:
+            transparent = facecolor is None
+
+        save_kwargs = {'dpi': dpi, 'bbox_inches': bbox_inches, 'transparent': transparent}
+        if facecolor is not None:
+            save_kwargs['facecolor'] = facecolor
+            save_kwargs['edgecolor'] = facecolor
+        self._fig.savefig(output_filename, **save_kwargs)
 
         if save_plot_history:
             self.save_plot_history(output_filename)
 
 
-    def save_svg(self, output_filename, save_plot_history = True):
+    def save_svg(self, output_filename, save_plot_history = True, transparent=None, facecolor=None):
         """
         Save the current plot as a SVG file.
         Also saves the numerical data of the curves to a CSV file in a 'Numeric_Plot_Data' subfolder.
@@ -2133,7 +3694,17 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         :param output_filename: The path to save the SVG file.
         """
         output_filename = filename_replace_last_append(output_filename, ".svg")
-        self._fig.savefig(output_filename, bbox_inches="tight")
+
+        if facecolor is None and self.save_bg_color:
+            facecolor = self.save_bg_color
+        if transparent is None:
+            transparent = facecolor is None
+
+        save_kwargs = {'bbox_inches': "tight", 'transparent': transparent}
+        if facecolor is not None:
+            save_kwargs['facecolor'] = facecolor
+            save_kwargs['edgecolor'] = facecolor
+        self._fig.savefig(output_filename, **save_kwargs)
 
         if save_plot_history:
             self.save_plot_history(output_filename)
@@ -2211,18 +3782,65 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
         """
         Convert Plot object to Plot_JSON structure.
         """
+        def _frame_to_curve_grid_bar_data(frame_objects):
+            frame_curve_datas = []
+            frame_grid_datas = []
+            frame_bar_datas = []
+            for frame_obj in frame_objects:
+                if isinstance(frame_obj, Curve) and hasattr(frame_obj, 'to_JSON_data'):
+                    frame_curve_datas.append(frame_obj.to_JSON_data())
+                elif isinstance(frame_obj, Grid) and hasattr(frame_obj, 'to_JSON_data'):
+                    frame_grid_datas.append(frame_obj.to_JSON_data())
+                elif isinstance(frame_obj, Bar) and hasattr(frame_obj, 'to_JSON_data'):
+                    frame_bar_datas.append(frame_obj.to_JSON_data())
+            return frame_curve_datas, frame_grid_datas, frame_bar_datas
+
         curve_datas = []
         grid_datas = []
-        
-        for obj in self.plot_objects:
-            if isinstance(obj, Curve) and hasattr(obj, 'to_JSON_data'):
-                curve_datas.append(obj.to_JSON_data())
-            elif isinstance(obj, Grid) and hasattr(obj, 'to_JSON_data'):
-                grid_datas.append(obj.to_JSON_data())
+        bar_datas = []
 
-        return Plot_DataClass(
+        curve_frames_datas = None
+        grid_frames_datas = None
+        bar_frames_datas = None
+
+        if self._plot_objects_frames:
+            first_frame = self._plot_objects_frames[0] if self._plot_objects_frames else []
+            curve_datas, grid_datas, bar_datas = _frame_to_curve_grid_bar_data(first_frame)
+
+            has_curve_in_frames = any(any(isinstance(obj, Curve) for obj in frame) for frame in self._plot_objects_frames)
+            has_grid_in_frames = any(any(isinstance(obj, Grid) for obj in frame) for frame in self._plot_objects_frames)
+            has_bar_in_frames = any(any(isinstance(obj, Bar) for obj in frame) for frame in self._plot_objects_frames)
+
+            if has_curve_in_frames:
+                curve_frames_datas = []
+                for frame in self._plot_objects_frames:
+                    c_datas, _, _ = _frame_to_curve_grid_bar_data(frame)
+                    curve_frames_datas.append(c_datas)
+
+            if has_grid_in_frames:
+                grid_frames_datas = []
+                for frame in self._plot_objects_frames:
+                    _, g_datas, _ = _frame_to_curve_grid_bar_data(frame)
+                    grid_frames_datas.append(g_datas)
+
+            if has_bar_in_frames:
+                bar_frames_datas = []
+                for frame in self._plot_objects_frames:
+                    _, _, b_datas = _frame_to_curve_grid_bar_data(frame)
+                    bar_frames_datas.append(b_datas)
+        else:
+            for obj in self.plot_objects:
+                if isinstance(obj, Curve) and hasattr(obj, 'to_JSON_data'):
+                    curve_datas.append(obj.to_JSON_data())
+                elif isinstance(obj, Grid) and hasattr(obj, 'to_JSON_data'):
+                    grid_datas.append(obj.to_JSON_data())
+                elif isinstance(obj, Bar) and hasattr(obj, 'to_JSON_data'):
+                    bar_datas.append(obj.to_JSON_data())
+
+        plot_data = Plot_DataClass(
             Curve_objects=curve_datas,
             Grid_objects=grid_datas,
+            Bar_objects=bar_datas,
             x_axis_label=self.x_axis_label,
             y_axis_label=self.y_axis_label,
             fig_size_inch=self.fig_size_inch,
@@ -2245,16 +3863,22 @@ class Plot(QtWidgets.QWidget, Qt_Widget_Common_Functions):
             auto_color=self.auto_color,
             save_img_filepath=self.save_img_filepath,
             save_img_dpi=self.save_img_dpi,
+            copy_img_dpi=self.copy_img_dpi,
             use_chinese_font=self.chinese_font,
-            shift_window=self._shift_window, 
+            shift_window=self._shift_window,
+            window_size_pixel=self._window_size_pixel,
             figure_title=self.current_title,
             window_title=self.windowTitle() if hasattr(self, 'windowTitle') else ""
         )
+        plot_data.Curve_objects_frames = curve_frames_datas
+        plot_data.Grid_objects_frames = grid_frames_datas
+        plot_data.Bar_objects_frames = bar_frames_datas
+        plot_data.current_frame_index = self._current_frame_index
+        plot_data.frame_labels = list(self._frame_labels) if self._frame_labels else None
+        return plot_data
 
     def dump_to_JSON(self, filename):
         self.to_DataClass().dump_to_JSON(filename)
-
-
 
 def integrate_discrete_points(x_values, y_values, start_range, end_range):
     sort = sorted(list(zip(x_values, y_values)), key=lambda x: x[0])
@@ -2340,6 +3964,7 @@ def simulate_data_for_sigma(input_mean, sigma):
 def on_mouse_click(event):
     # print('Event received:',int(event.xdata),int(event.xdata%1*60),event.ydata)
     print('Event received:', event.xdata, event.ydata)
+    # Note: Plot._on_mouse_click is the instance method used by the Plot class
 
 
 def interp_manipulation(interp1, interp2,
@@ -2705,11 +4330,16 @@ def regression_on_UVI_over_distance(input_X, input_Y):
     def model(x, x0, a, k):
         return k * (x + x0) ** (-a)
 
-    opt_values = nonlinear_model_fit(model, input_X, input_Y, (0, 2, 10000), ("x0", "a", "k"), show_plot=False)
+    opt_values, _ = nonlinear_model_fit(
+        model, input_X, input_Y, (0, 2, 10000), ("x0", "a", "k"),
+        show_plot=False, print_covariances=False, print_result=False,
+    )
+    params = tuple(float(v) for v in opt_values)  # (x0, a, k)
 
     def fitted_function(x):
-        return model(x, *opt_values)
+        return model(x, *params)
 
+    fitted_function.parameters = params
     return fitted_function
 
 
@@ -2867,33 +4497,33 @@ def plot_2D_scatter_surface_matplotlib(_X, _Y, _Z, X_Label="X axis", Y_Label="Y 
 
     min_X = min(_X)
     max_X = max(_X)
-    dist_X = max_X - min_X
+    span_X = max_X - min_X
     X_range = [min_X, max_X]
 
-    print("Min, max, dist of X:", min_X, max_X, dist_X, X_range)
+    print("Min, max, span of X:", min_X, max_X, span_X, X_range)
 
     min_Y = min(_Y)
     max_Y = max(_Y)
-    dist_Y = max_Y - min_Y
+    span_Y = max_Y - min_Y
     Y_range = [min_Y, max_Y]
 
-    print("Min, max, dist of Y:", min_Y, max_Y, dist_Y, Y_range)
+    print("Min, max, span of Y:", min_Y, max_Y, span_Y, Y_range)
 
     ranges_for_imshow = X_range + Y_range
     ranges_for_contours = X_range + list(reversed(Y_range))
 
     figure(figsize=(10, 3.5), facecolor='w', edgecolor='k')
     matplotlib.rcParams.update({'font.size': 8})
-    matplotlib.rcParams.update({'font.family': "Arial"})
+    matplotlib.rcParams.update({'font.family': ["Arial"] + CJK_FALLBACK_FONTS})
 
-    if dist_Y > dist_X:
+    if span_Y > span_X:
         grid_x = 200
-        grid_y = int(grid_x / dist_X * dist_Y)
+        grid_y = int(grid_x / span_X * span_Y)
         # 限制最多10:1的长宽比
         grid_y = min(grid_y, 10 * grid_x)
     else:
         grid_y = 200
-        grid_x = int(grid_y / dist_Y * dist_X)
+        grid_x = int(grid_y / span_Y * span_X)
         # 限制最多10:1的长宽比
         grid_x = min(grid_x, 10 * grid_y)
 
@@ -2992,24 +4622,24 @@ def plot_2D_scatter_surface_mayavi(_X, _Y, _Z, X_Label="X axis", Y_Label="Y axis
 
     min_X = min(_X)
     max_X = max(_X)
-    dist_X = max_X - min_X
+    span_X = max_X - min_X
     X_range = [min_X, max_X]
 
     min_Y = min(_Y)
     max_Y = max(_Y)
-    dist_Y = max_Y - min_Y
+    span_Y = max_Y - min_Y
     Y_range = [min_Y, max_Y]
 
     grid = 300
 
-    if dist_Y > dist_X:
+    if span_Y > span_X:
         grid_x = grid
-        grid_y = int(grid_x / dist_X * dist_Y)
+        grid_y = int(grid_x / span_X * span_Y)
         # 限制最多10:1的长宽比
         grid_y = min(grid_y, 10 * grid_x)
     else:
         grid_y = grid
-        grid_x = int(grid_y / dist_Y * dist_X)
+        grid_x = int(grid_y / span_Y * span_X)
         # 限制最多10:1的长宽比
         grid_x = min(grid_x, 10 * grid_y)
 
@@ -3114,35 +4744,38 @@ if "check_consistency" in locals():
 
 if __name__ == "__main__":
 
-    data = r"""-221.74	154358.0857
--221.79	151047.9324
--221.84	147737.7792
--221.89	144427.6259
--221.94	141117.4726
--221.99	137807.3193
--222.04	134497.166
--222.09	131187.0127
--222.14	130161.6666
--222.19	130222.3311
--222.24	130282.9955
--222.29	130343.66
--222.34	130404.3245
--222.39	130464.989
--222.44	130525.6534
--222.49	130089.6275
--222.54	128383.4849
--222.59	126677.3422
--222.64	124971.1996
--222.69	123265.057
--222.74	121558.9144
--222.79	119852.7718
--222.84	118146.6292
--222.89	116983.0905
--222.94	115890.4572"""
+    a = Plot_from_JSON(r"...")
+    a.pause()
 
-    data = [list(map(float, line.split())) for line in data.splitlines()]
-    X, Y = zip(*data)
-    Plot(Curve(X=X, Y=Y, plot_dot=True, dot_format=point_mkr, dot_width=5, plot_curve=False, dot_color=blue_color), window_size_pixel=(400,300), figure_title="128102y10412049127094709").pause()
+#     data = r"""-221.74	154358.0857
+# -221.79	151047.9324
+# -221.84	147737.7792
+# -221.89	144427.6259
+# -221.94	141117.4726
+# -221.99	137807.3193
+# -222.04	134497.166
+# -222.09	131187.0127
+# -222.14	130161.6666
+# -222.19	130222.3311
+# -222.24	130282.9955
+# -222.29	130343.66
+# -222.34	130404.3245
+# -222.39	130464.989
+# -222.44	130525.6534
+# -222.49	130089.6275
+# -222.54	128383.4849
+# -222.59	126677.3422
+# -222.64	124971.1996
+# -222.69	123265.057
+# -222.74	121558.9144
+# -222.79	119852.7718
+# -222.84	118146.6292
+# -222.89	116983.0905
+# -222.94	115890.4572"""
+
+#     data = [list(map(float, line.split())) for line in data.splitlines()]
+#     X, Y = zip(*data)
+#     Plot(Curve(X=X, Y=Y, plot_dot=True, dot_format=point_mkr, dot_width=5, plot_curve=False, dot_color=blue_color), window_size_pixel=(400,400), figure_title="128102y10412049127094709").pause()
     # Plot(Curve(X=X, Y=Y, plot_dot=True, dot_format=point_mkr, dot_width=5, plot_curve=False, dot_color=blue_color), fig_size_inch=(3,2)).pause()
     # Plot(Curve(X=X, Y=Y, plot_dot=True, dot_format=point_mkr, dot_width=5, plot_curve=False, dot_color=blue_color), fig_size_pixel=(400,300)).pause()
 

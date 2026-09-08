@@ -94,6 +94,9 @@ class Curve_DataClass:
     plot_dot: Optional[bool] = None
     dot_format: str = point_mkr
     dot_color: Optional[str] = None
+    dot_alpha: Optional[float] = None
+    dot_edge_color: Optional[str] = None
+    dot_edge_width: Optional[float] = None
     dot_width: int = 5
     plot_curve: Optional[bool] = None
     curve_format: str = ""
@@ -106,6 +109,7 @@ class Curve_DataClass:
     curve_legend_color: str = ""
     curve_legend_format: str = ""
     fill_color: Optional[str] = None
+    fill_alpha: float = 0.3
     normalize_to: Union[None, Tuple[float, float], float] = None
     scale_factor: Optional[float] = None
     
@@ -120,10 +124,18 @@ class Curve_DataClass:
         return dataclasses.asdict(self)
 
     def dump_to_JSON(self, filename, automatic_extension = True):
-        if automatic_extension and not filename.lower().endswith('.curve'):
-            filename = filename + '.Curve'
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(self.to_dict(), f, default=_json_default, indent=4)
+        if automatic_extension:
+            if filename.endswith('.json.Curve'):
+                pass
+            elif filename.endswith('.json'):
+                filename = filename + '.Curve'
+            else:
+                filename = filename + '.json.Curve'
+        tmp_filename = filename + ".tmp"
+        with open(tmp_filename, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f, default=_json_default, indent=4, ensure_ascii=False)
+        os.replace(tmp_filename, filename)
+        return filename
             
 
 @dataclass
@@ -158,16 +170,73 @@ class Grid_DataClass:
     grid_line_X: Union[bool, Sequence[str], float, None] = None
     grid_line_Y: Union[bool, Sequence[str], float, None] = None
     show_colorbar: bool = False
+    show_heatmap: bool = True
 
     def to_dict(self):
         return dataclasses.asdict(self)
 
     def dump_to_JSON(self, filename, automatic_extension = True):
-        if automatic_extension and not filename.lower().endswith('.grid'):
-            filename = filename + '.Grid'
+        if automatic_extension:
+            if filename.endswith('.json.Grid'):
+                pass
+            elif filename.endswith('.json'):
+                filename = filename + '.Grid'
+            else:
+                filename = filename + '.json.Grid'
 
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(self.to_dict(), f, default=_json_default, indent=4)
+        tmp_filename = filename + ".tmp"
+        with open(tmp_filename, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f, default=_json_default, indent=4, ensure_ascii=False)
+        os.replace(tmp_filename, filename)
+
+        return filename
+
+@dataclass
+class Bar_DataClass:
+    """
+    Data class representing a Bar plot object for JSON serialization and Plotting.
+
+    This class mirrors the parameters available in ``Bar``.
+    """
+    categories: Optional[Sequence[str]] = None
+    values: Optional[Sequence[float]] = None
+    Y_label: str = ""
+    colors: Optional[Sequence[str]] = None
+    color: Optional[str] = None
+    alpha: float = 0.85
+    edge_color: str = '#333333'
+    edge_width: float = 0.6
+    bar_width: float = 0.7
+    show_value_labels: bool = True
+    value_label_format: str = "{:.3f}"
+    value_label_fontsize: Optional[float] = None
+    value_label_color: str = '#333333'
+    value_label_offset: Optional[float] = None
+    sort_by_value: bool = False
+    sort_ascending: bool = True
+    highlight: Optional[Sequence[str]] = None
+    highlight_bold_label: bool = True
+    highlight_bold_value: bool = True
+    orientation: str = "vertical"
+    hatch: Optional[str] = None
+    corner_radius: Optional[float] = None
+
+    def to_dict(self):
+        return dataclasses.asdict(self)
+
+    def dump_to_JSON(self, filename, automatic_extension=True):
+        if automatic_extension:
+            if filename.endswith('.json.Bar'):
+                pass
+            elif filename.endswith('.json'):
+                filename = filename + '.Bar'
+            else:
+                filename = filename + '.json.Bar'
+        tmp_filename = filename + ".tmp"
+        with open(tmp_filename, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f, default=_json_default, indent=4, ensure_ascii=False)
+        os.replace(tmp_filename, filename)
+        return filename
 
 
 @dataclass
@@ -177,6 +246,12 @@ class Plot_DataClass:
     """
     Curve_objects: Union[Curve_DataClass, Sequence[Curve_DataClass], None] = None
     Grid_objects: Union[Grid_DataClass, Sequence[Grid_DataClass], None] = None
+    Bar_objects: Union[Bar_DataClass, Sequence[Bar_DataClass], None] = None
+    Curve_objects_frames: Optional[Sequence[Sequence[Curve_DataClass]]] = None
+    Grid_objects_frames: Optional[Sequence[Sequence[Grid_DataClass]]] = None
+    Bar_objects_frames: Optional[Sequence[Sequence[Bar_DataClass]]] = None
+    current_frame_index: int = 0
+    frame_labels: Optional[List[str]] = None  # Per-frame display labels (e.g. epoch strings like "E01000")
     x_axis_label: str = "X"
     y_axis_label: str = "Y"
     fig_size_inch: Optional[Tuple[float, float]] = None
@@ -200,6 +275,7 @@ class Plot_DataClass:
     auto_color: Optional[bool] = None
     save_img_filepath: Optional[str] = None
     save_img_dpi: int = 3000
+    copy_img_dpi: int = 600
     use_chinese_font: bool = False
     shift_window: Union[Tuple[float, float], int, float] = (0, 0)
     multiple_plot_arrangement: Optional[Tuple[int, int]] = None
@@ -212,13 +288,23 @@ class Plot_DataClass:
         return dataclasses.asdict(self)
 
     def dump_to_JSON(self, filename, automatic_extension = True):
-        if automatic_extension and not filename.lower().endswith('.plot'):
-            filename = filename + '.Plot'
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(self.to_dict(), f, default=_json_default, indent=4)
+        if automatic_extension:
+            if filename.endswith('.json.Plot'):
+                pass
+            elif filename.endswith('.json'):
+                filename = filename + '.Plot'
+            else:
+                filename = filename + '.json.Plot'
+        # Atomic write: write to temp file first, then rename to avoid
+        # partial reads by the monitoring process.
+        tmp_filename = filename + ".tmp"
+        with open(tmp_filename, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f, default=_json_default, indent=4, ensure_ascii=False)
+        os.replace(tmp_filename, filename)
 
+        return filename
 
-def check_consistency(Curve_Class, Grid_Class, Plot_Class):
+def check_consistency(Curve_Class, Grid_Class, Plot_Class, Bar_Class=None):
     """
     Checks if the JSON data classes (Curve_JSON, Grid_JSON, Plot_JSON) 
     are consistent with the implementation classes (Curve, Grid, Plot).
@@ -252,6 +338,8 @@ def check_consistency(Curve_Class, Grid_Class, Plot_Class):
     check_one_pair(Curve_DataClass, Curve_Class, "Curve")
     check_one_pair(Grid_DataClass, Grid_Class, "Grid")
     check_one_pair(Plot_DataClass, Plot_Class, "Plot")
+    if Bar_Class is not None:
+        check_one_pair(Bar_DataClass, Bar_Class, "Bar")
 
 
 def Plot_json_to_image(json_file, output_format='png', dpi=600, output_path=None):
@@ -286,16 +374,20 @@ def Plot_json_to_image(json_file, output_format='png', dpi=600, output_path=None
             data = json.load(f)
         
         # Check if it looks like a Plot JSON (has expected keys)
-        # A valid Plot JSON should have at least one of: Curve_objects, Grid_objects
+        # A valid Plot JSON should have at least one of: Curve_objects, Grid_objects, Curve_objects_frames, Grid_objects_frames
         if not isinstance(data, dict):
             print(f"Error: Invalid JSON structure in {json_file}")
             return None
         
         has_curves = 'Curve_objects' in data
         has_grids = 'Grid_objects' in data
+        has_bars = 'Bar_objects' in data
+        has_curve_frames = 'Curve_objects_frames' in data
+        has_grid_frames = 'Grid_objects_frames' in data
+        has_bar_frames = 'Bar_objects_frames' in data
         
-        if not (has_curves or has_grids):
-            print(f"Warning: JSON file doesn't appear to be a Plot JSON (no Curve_objects or Grid_objects)")
+        if not (has_curves or has_grids or has_bars or has_curve_frames or has_grid_frames or has_bar_frames):
+            print(f"Warning: JSON file doesn't appear to be a Plot JSON (no Curve_objects/Grid_objects/Bar_objects/frames)")
             # Still try to proceed in case it's valid
             
     except json.JSONDecodeError as e:
