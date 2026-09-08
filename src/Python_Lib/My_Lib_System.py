@@ -2,10 +2,7 @@
 __author__ = 'LiYuanhe'
 
 import sys
-import pathlib
-Python_Lib_path = str(pathlib.Path(__file__).parent.resolve())
-sys.path.append(Python_Lib_path)
-from My_Lib_Stock import *
+from Python_Lib.My_Lib_Stock import *
 import platform
 
 # Cross-platform keyboard detection
@@ -223,5 +220,93 @@ def is_headless():
     return False
 
 
+def set_env_variable_permanently(var_name, var_value, scope='user'):
+    """
+    Set an environment variable permanently so future terminal sessions can use it.
+
+    On Windows this uses `setx` (user scope by default). The current Python process
+    environment is also updated immediately.
+
+    :param var_name: Environment variable name
+    :param var_value: Environment variable value
+    :param scope: 'user' or 'machine' (Windows only; machine requires admin)
+    :return: (success: bool, message: str)
+    """
+    import os
+    import subprocess
+
+    if not var_name or not str(var_name).strip():
+        return False, 'Variable name cannot be empty.'
+
+    var_name = str(var_name).strip()
+    var_value = '' if var_value is None else str(var_value)
+
+    system = platform.system()
+    if system != 'Windows':
+        return False, f"Permanent env var setup in this helper is only implemented for Windows (current: {system})."
+
+    command = ['setx', var_name, var_value]
+    if str(scope).lower() == 'machine':
+        command.append('/M')
+
+    completed = subprocess.run(command, capture_output=True, text=True, shell=False)
+    output_text = '\n'.join(x for x in [completed.stdout, completed.stderr] if x).strip()
+
+    if completed.returncode != 0:
+        if not output_text:
+            output_text = f'setx failed with return code {completed.returncode}.'
+        return False, output_text
+
+    os.environ[var_name] = var_value
+    message = f"Saved '{var_name}' permanently for future sessions."
+    if output_text:
+        message += f"\n{output_text}"
+    message += '\nNote: Already-open terminals usually need to be reopened to see this change.'
+    return True, message
+
+
+def interactive_env_var_setup():
+    """Interactive CLI for permanently adding environment variables."""
+    print('Interactive mode: permanent environment variable setup')
+    print('This updates future terminal sessions (cmd/PowerShell) on Windows.')
+
+    while True:
+        print('\nSelect an option:')
+        print('  1) Add or update a permanent env variable')
+        print('  2) Exit')
+
+        choice = input('Choice [1/2]: ').strip()
+        if choice == '2':
+            print('Exit interactive mode.')
+            return
+
+        if choice != '1':
+            print('Invalid choice. Please enter 1 or 2.')
+            continue
+
+        var_name = input('Environment variable name: ').strip()
+        if not var_name:
+            print('Variable name cannot be empty.')
+            continue
+
+        var_value = input('Environment variable value: ')
+
+        print('\nScope:')
+        print('  1) User (recommended)')
+        print('  2) Machine (all users, requires admin)')
+        scope_choice = input('Scope [1/2, default 1]: ').strip()
+        scope = 'machine' if scope_choice == '2' else 'user'
+
+        confirm = input(f"Confirm set {var_name} for {scope} scope? [y/N]: ").strip().lower()
+        if confirm not in ('y', 'yes'):
+            print('Cancelled.')
+            continue
+
+        success, message = set_env_variable_permanently(var_name, var_value, scope=scope)
+        print(message)
+        if not success and scope == 'machine':
+            print('Tip: Run terminal as Administrator for machine-scope updates.')
+
+
 if __name__ == '__main__':
-    pass
+    interactive_env_var_setup()
