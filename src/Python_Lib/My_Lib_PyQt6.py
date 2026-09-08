@@ -709,6 +709,340 @@ def pyqt_ui_compile(filename):
             ui_File_Compile_object.write(ui_File_Compile_content)
 
 
+# ──────────── Column-aware multi-line text editor ────────────
+class _LineNumberArea(QtWidgets.QWidget):
+    """Gutter widget that paints line numbers for ColumnEditTextEdit."""
+
+    def __init__(self, editor):
+        super().__init__(editor)
+        self._editor = editor
+
+    def sizeHint(self):
+        return QtCore.QSize(self._editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event):
+        self._editor.line_number_area_paint_event(event)
+
+
+class ColumnEditTextEdit(QtWidgets.QPlainTextEdit):
+    """Plain-text editor with a line-number gutter and Alt+drag column editing.
+
+    Features
+    --------
+    * Consolas font, no line wrapping.
+    * A line-number gutter; numbers past ``curve_count`` are painted grey (those
+      lines map to no curve) but remain fully editable.
+    * Alt+drag marks a rectangular block; typing / Backspace / Delete then edits
+      every line in the block at the same columns. Short lines are space-padded
+      on insert. Escape (or a plain click / arrow key) leaves column mode.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        font = QFont("Consolas", 10)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self.setFont(font)
+        self.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+
+        self._curve_count = 0
+
+        self._line_number_area = _LineNumberArea(self)
+        self.blockCountChanged.connect(self._update_line_number_area_width)
+        self.updateRequest.connect(self._update_line_number_area)
+        self._update_line_number_area_width(0)
+
+        # Column-selection state. Anchor/caret are (block_number, column) pairs.
+        self._col_active = False     # a column block (or multi-line caret) exists
+        self._col_dragging = False   # mouse is currently Alt-dragging
+        self._col_anchor = (0, 0)
+        self._col_caret = (0, 0)
+
+    # ── grey-line-number threshold ──
+    def set_curve_count(self, n):
+        self._curve_count = max(0, int(n))
+        self._line_number_area.update()
+
+    # ── line-number gutter (standard QPlainTextEdit pattern) ──
+    def line_number_area_width(self):
+        digits = max(1, len(str(max(1, self.blockCount()))))
+        return 12 + self.fontMetrics().horizontalAdvance('9') * digits
+
+    def _update_line_number_area_width(self, _count=0):
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def _update_line_number_area(self, rect, dy):
+        if dy:
+            self._line_number_area.scroll(0, dy)
+        else:
+            self._line_number_area.update(
+                0, rect.y(), self._line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_line_number_area_width(0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self._line_number_area.setGeometry(
+            QtCore.QRect(cr.left(), cr.top(),
+                         self.line_number_area_width(), cr.height()))
+
+    def line_number_area_paint_event(self, event):
+        painter = QtGui.QPainter(self._line_number_area)
+        painter.fillRect(event.rect(), QtGui.QColor("#f0f0f0"))
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = int(self.blockBoundingGeometry(block)
+                  .translated(self.contentOffset()).top())
+        bottom = top + int(self.blockBoundingRect(block).height())
+        normal_color = QtGui.QColor("#606060")
+        grey_color = QtGui.QColor("#b8b8b8")
+        flags = int(QtCore_Qt.AlignmentFlag.AlignRight | QtCore_Qt.AlignmentFlag.AlignVCenter)
+        width = self._line_number_area.width() - 4
+        height = self.fontMetrics().height()
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                # Lines past the curve count are "extra" → grey number.
+                painter.setPen(grey_color if block_number >= self._curve_count
+                               else normal_color)
+                painter.drawText(0, top, width, height, flags,
+                                 str(block_number + 1))
+            block = block.next()
+            top = bottom
+            bottom = top + int(self.blockBoundingRect(block).height())
+            block_number += 1
+        painter.end()
+
+    # ── column-mode geometry helpers ──
+    def _pos_to_line_col(self, pos):
+        cursor = self.cursorForPosition(pos)
+        return cursor.blockNumber(), cursor.positionInBlock()
+
+    def _make_cursor(self, line, col):
+        block = self.document().findBlockByNumber(line)
+        cursor = QtGui.QTextCursor(block)
+        col = min(max(0, col), block.length() - 1)  # length counts the separator
+        cursor.setPosition(block.position() + col)
+        return cursor
+
+    def _column_bounds(self):
+        a_line, a_col = self._col_anchor
+        c_line, c_col = self._col_caret
+        return (min(a_line, c_line), max(a_line, c_line),
+                min(a_col, c_col), max(a_col, c_col))
+
+    def _clear_column_mode(self):
+        if self._col_active or self._col_dragging:
+            self._col_active = False
+            self._col_dragging = False
+            self.viewport().update()
+
+    # ── mouse: Alt+drag starts / extends a column block ──
+    def mousePressEvent(self, event):
+        if (event.button() == QtCore_Qt.MouseButton.LeftButton
+                and event.modifiers() & QtCore_Qt.KeyboardModifier.AltModifier):
+            line, col = self._pos_to_line_col(event.pos())
+            self._col_anchor = (line, col)
+            self._col_caret = (line, col)
+            self._col_dragging = True
+            self._col_active = True
+            self.setTextCursor(self._make_cursor(line, col))
+            self.viewport().update()
+            event.accept()
+            return
+        self._clear_column_mode()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._col_dragging:
+            line, col = self._pos_to_line_col(event.pos())
+            self._col_caret = (line, col)
+            self.setTextCursor(self._make_cursor(line, col))
+            self.viewport().update()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._col_dragging:
+            self._col_dragging = False
+            line, col = self._pos_to_line_col(event.pos())
+            self._col_caret = (line, col)
+            top, bottom, left, right = self._column_bounds()
+            # A zero-area Alt-click is just a normal caret.
+            if top == bottom and left == right:
+                self._col_active = False
+            self.viewport().update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    # ── paint the column selection / multi-line caret over the text ──
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._col_active:
+            return
+        top_line, bottom_line, left_col, right_col = self._column_bounds()
+        painter = QtGui.QPainter(self.viewport())
+        sel_color = QtGui.QColor(51, 153, 255, 70)
+        caret_color = QtGui.QColor(51, 102, 204)
+        for line in range(top_line, bottom_line + 1):
+            block = self.document().findBlockByNumber(line)
+            if not block.isValid() or not block.isVisible():
+                continue
+            text_len = block.length() - 1
+            left_rect = self.cursorRect(self._make_cursor(line, min(left_col, text_len)))
+            if left_col == right_col:
+                painter.fillRect(left_rect.left(), left_rect.top(),
+                                 2, left_rect.height(), caret_color)
+            else:
+                right_rect = self.cursorRect(
+                    self._make_cursor(line, min(right_col, text_len)))
+                w = max(right_rect.left() - left_rect.left(), 2)
+                painter.fillRect(left_rect.left(), left_rect.top(),
+                                 w, left_rect.height(), sel_color)
+        painter.end()
+
+    # ── keyboard: route edits to every line of the column block ──
+    def keyPressEvent(self, event):
+        if not self._col_active:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        ctrl = bool(event.modifiers() & QtCore_Qt.KeyboardModifier.ControlModifier)
+        if key == QtCore_Qt.Key.Key_Escape:
+            self._clear_column_mode()
+            event.accept(); return
+        if ctrl and key == QtCore_Qt.Key.Key_C:
+            self._column_copy(); event.accept(); return
+        if ctrl and key == QtCore_Qt.Key.Key_X:
+            self._column_copy(); self._column_replace(""); event.accept(); return
+        if ctrl and key == QtCore_Qt.Key.Key_V:
+            self._column_paste(); event.accept(); return
+        if ctrl:
+            self._clear_column_mode()
+            super().keyPressEvent(event); return
+        # Bare modifier presses (e.g. Shift before an uppercase letter) must
+        # not drop column mode, or Shift+letter typing would break.
+        if key in (QtCore_Qt.Key.Key_Shift, QtCore_Qt.Key.Key_Control, QtCore_Qt.Key.Key_Alt,
+                   QtCore_Qt.Key.Key_Meta, QtCore_Qt.Key.Key_AltGr, QtCore_Qt.Key.Key_CapsLock,
+                   QtCore_Qt.Key.Key_NumLock):
+            super().keyPressEvent(event); return
+        if key == QtCore_Qt.Key.Key_Backspace:
+            self._column_backspace(); event.accept(); return
+        if key == QtCore_Qt.Key.Key_Delete:
+            self._column_delete(); event.accept(); return
+        if key in (QtCore_Qt.Key.Key_Left, QtCore_Qt.Key.Key_Right, QtCore_Qt.Key.Key_Up,
+                   QtCore_Qt.Key.Key_Down, QtCore_Qt.Key.Key_Home, QtCore_Qt.Key.Key_End,
+                   QtCore_Qt.Key.Key_Return, QtCore_Qt.Key.Key_Enter, QtCore_Qt.Key.Key_Tab,
+                   QtCore_Qt.Key.Key_PageUp, QtCore_Qt.Key.Key_PageDown):
+            self._clear_column_mode()
+            super().keyPressEvent(event); return
+        text = event.text()
+        if text and text.isprintable():
+            self._column_replace(text); event.accept(); return
+        self._clear_column_mode()
+        super().keyPressEvent(event)
+
+    # ── per-line column edits ──
+    def _replace_line_columns(self, line, left, right, text):
+        """On one line, replace the columns [left, right) with *text*.
+
+        Lines shorter than *left* are space-padded before a non-empty insert;
+        an empty *text* on such a line is a no-op (so Backspace/Delete never
+        add padding)."""
+        block = self.document().findBlockByNumber(line)
+        if not block.isValid():
+            return
+        text_len = block.length() - 1
+        cursor = QtGui.QTextCursor(block)
+        if left >= text_len:
+            if not text:
+                return
+            cursor.setPosition(block.position() + text_len)
+            cursor.insertText(' ' * (left - text_len) + text)
+        else:
+            cursor.setPosition(block.position() + left)
+            cursor.setPosition(block.position() + min(right, text_len),
+                               QtGui.QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertText(text)
+
+    def _column_replace(self, text):
+        """Replace the current block-selection columns on every line with *text*
+        (a single line), then collapse to a multi-line caret after it."""
+        top, bottom, left, right = self._column_bounds()
+        edit = QtGui.QTextCursor(self.document())
+        edit.beginEditBlock()
+        for line in range(top, bottom + 1):
+            self._replace_line_columns(line, left, right, text)
+        edit.endEditBlock()
+        new_col = left + len(text)
+        self._col_anchor = (top, new_col)
+        self._col_caret = (bottom, new_col)
+        self._col_active = True
+        self.setTextCursor(self._make_cursor(bottom, new_col))
+        self.viewport().update()
+
+    def _column_backspace(self):
+        top, bottom, left, right = self._column_bounds()
+        if left != right:
+            self._column_replace("")
+            return
+        if left == 0:
+            return
+        edit = QtGui.QTextCursor(self.document())
+        edit.beginEditBlock()
+        for line in range(top, bottom + 1):
+            self._replace_line_columns(line, left - 1, left, "")
+        edit.endEditBlock()
+        new_col = left - 1
+        self._col_anchor = (top, new_col)
+        self._col_caret = (bottom, new_col)
+        self.setTextCursor(self._make_cursor(bottom, new_col))
+        self.viewport().update()
+
+    def _column_delete(self):
+        top, bottom, left, right = self._column_bounds()
+        if left != right:
+            self._column_replace("")
+            return
+        edit = QtGui.QTextCursor(self.document())
+        edit.beginEditBlock()
+        for line in range(top, bottom + 1):
+            self._replace_line_columns(line, left, left + 1, "")
+        edit.endEditBlock()
+        self.setTextCursor(self._make_cursor(bottom, left))
+        self.viewport().update()
+
+    def _column_copy(self):
+        top, bottom, left, right = self._column_bounds()
+        rows = []
+        for line in range(top, bottom + 1):
+            block = self.document().findBlockByNumber(line)
+            s = block.text() if block.isValid() else ""
+            rows.append(s[min(left, len(s)):min(right, len(s))])
+        QApplication.clipboard().setText("\n".join(rows))
+
+    def _column_paste(self):
+        clip = QApplication.clipboard().text()
+        top, bottom, left, right = self._column_bounds()
+        nrows = bottom - top + 1
+        parts = clip.split('\n')
+        if len(parts) == nrows and nrows > 1:
+            # One clipboard line per selected row → distribute.
+            edit = QtGui.QTextCursor(self.document())
+            edit.beginEditBlock()
+            for i, line in enumerate(range(top, bottom + 1)):
+                self._replace_line_columns(line, left, right, parts[i])
+            edit.endEditBlock()
+            self._clear_column_mode()
+            self.setTextCursor(self._make_cursor(bottom, left + len(parts[-1])))
+            return
+        # Otherwise insert the first clipboard line on every row.
+        self._column_replace(parts[0] if parts else "")
+
+
 class ResizableLabel(QtWidgets.QLabel):
     def __init__(self, text="", parent=None, max_font_size = 10):
         super().__init__(text, parent)
