@@ -10,89 +10,90 @@ from math import sqrt
 from math import exp
 # from Thermo_Correction_Factors import *
 
-if __name__ == '__main__':
+if __name__ == '__main__' and PYQT6_AVAILABLE:
     Application = QApplication(sys.argv)
 
-pyqt_ui_compile(os.path.join(os.path.dirname(__file__), 'UI', 'Batch_Extract_Thermo_Confirm.py'))
-from .UI.Batch_Extract_Thermo_Confirm import Ui_Batch_Extract_Thermo_Form
+if PYQT6_AVAILABLE:
+    pyqt_ui_compile(os.path.join(os.path.dirname(__file__), 'UI', 'Batch_Extract_Thermo_Confirm.py'))
+    from .UI.Batch_Extract_Thermo_Confirm import Ui_Batch_Extract_Thermo_Form
 
-class Thermo_Factor_Form(Ui_Batch_Extract_Thermo_Form,QWidget,Qt_Widget_Common_Functions):
-    submit_clicked = pyqtSignal()
-    def __init__(self,filename, file_method, file_basis,factor_method,factor_basis, temp=298.15, pressure=1,ZPE_factor=1, H_factor=1, S_factor=1, source=""):
-        '''
+    class Thermo_Factor_Form(Ui_Batch_Extract_Thermo_Form,QWidget,Qt_Widget_Common_Functions):
+        submit_clicked = pyqtSignal()
+        def __init__(self,filename, file_method, file_basis,factor_method,factor_basis, temp=298.15, pressure=1,ZPE_factor=1, H_factor=1, S_factor=1, source=""):
+            '''
 
-        :param filename:
-        :param file_method: the method used in the output file
-        :param file_basis:  the basis used in the output file
-        :param factor_method:  the method found in the factor table
-        :param factor_basis: the basis found in the factor table
-        :param temp:
-        :param pressure:
-        :param ZPE_factor:
-        :param H_factor:
-        :param S_factor:
-        :param source:
-        :return:
-        '''
-        super(self.__class__, self).__init__()
-        self.setupUi(self)
+            :param filename:
+            :param file_method: the method used in the output file
+            :param file_basis:  the basis used in the output file
+            :param factor_method:  the method found in the factor table
+            :param factor_basis: the basis found in the factor table
+            :param temp:
+            :param pressure:
+            :param ZPE_factor:
+            :param H_factor:
+            :param S_factor:
+            :param source:
+            :return:
+            '''
+            super(self.__class__, self).__init__()
+            self.setupUi(self)
 
-        self.filename = filename
-        self.file_method = file_method
-        self.file_basis=file_basis
-        self.factor_method = factor_method
-        self.factor_basis=factor_basis
-        self.temp = temp
-        self.pressure = pressure
-        self.ZPE_factor = ZPE_factor
-        self.H_factor = H_factor
-        self.S_factor = S_factor
-        self.source = source
+            self.filename = filename
+            self.file_method = file_method
+            self.file_basis=file_basis
+            self.factor_method = factor_method
+            self.factor_basis=factor_basis
+            self.temp = temp
+            self.pressure = pressure
+            self.ZPE_factor = ZPE_factor
+            self.H_factor = H_factor
+            self.S_factor = S_factor
+            self.source = source
 
-        self.filename_label.setText(self.filename)
-        self.file_method_label.setText(self.file_method)
-        self.file_basis_label.setText(self.file_basis)
-        self.factor_method_label.setText(self.factor_method)
-        self.factor_basis_label.setText(self.factor_basis)
-        self.temp_doubleSpinBox.setValue(self.temp-273.15)
-        self.pressure_doubleSpinBox.setValue(self.pressure)
-        self.ZPE_doubleSpinBox.setValue(self.ZPE_factor)
-        self.H_doubleSpinBox.setValue(self.H_factor)
-        self.S_doubleSpinBox.setValue(self.S_factor)
-        self.source_lineEdit.setText(self.source)
+            self.filename_label.setText(self.filename)
+            self.file_method_label.setText(self.file_method)
+            self.file_basis_label.setText(self.file_basis)
+            self.factor_method_label.setText(self.factor_method)
+            self.factor_basis_label.setText(self.factor_basis)
+            self.temp_doubleSpinBox.setValue(self.temp-273.15)
+            self.pressure_doubleSpinBox.setValue(self.pressure)
+            self.ZPE_doubleSpinBox.setValue(self.ZPE_factor)
+            self.H_doubleSpinBox.setValue(self.H_factor)
+            self.S_doubleSpinBox.setValue(self.S_factor)
+            self.source_lineEdit.setText(self.source)
 
-        connect_once(self.submit_pushButton,self.submit_clicked)
-        connect_once(self.reset_pushButton,self.reset)
+            connect_once(self.submit_pushButton,self.submit_clicked)
+            connect_once(self.reset_pushButton,self.reset)
 
-        connect_once(self.temp_doubleSpinBox,self.update_value)
-        connect_once(self.pressure_doubleSpinBox,self.update_value)
-        connect_once(self.ZPE_doubleSpinBox,self.update_value)
-        connect_once(self.H_doubleSpinBox,self.update_value)
-        connect_once(self.S_doubleSpinBox,self.update_value)
-        connect_once(self.source_lineEdit,self.update_value)
-        connect_once(self.same_for_all_checkBox,self.update_value())
+            connect_once(self.temp_doubleSpinBox,self.update_value)
+            connect_once(self.pressure_doubleSpinBox,self.update_value)
+            connect_once(self.ZPE_doubleSpinBox,self.update_value)
+            connect_once(self.H_doubleSpinBox,self.update_value)
+            connect_once(self.S_doubleSpinBox,self.update_value)
+            connect_once(self.source_lineEdit,self.update_value)
+            connect_once(self.same_for_all_checkBox,self.update_value())
 
-        self.show()
+            self.show()
 
-    def update_value(self):
-        self.temp=self.temp_doubleSpinBox.value()+273.15
-        self.pressure=self.pressure_doubleSpinBox.value()*atm__Pa
-        self.ZPE_factor=self.ZPE_doubleSpinBox.value()
-        self.H_factor=self.H_doubleSpinBox.value()
-        self.S_factor=self.S_doubleSpinBox.value()
-        self.source=self.source_lineEdit.text()
-        self.same_for_all = self.same_for_all_checkBox.isChecked()
+        def update_value(self):
+            self.temp=self.temp_doubleSpinBox.value()+273.15
+            self.pressure=self.pressure_doubleSpinBox.value()*atm__Pa
+            self.ZPE_factor=self.ZPE_doubleSpinBox.value()
+            self.H_factor=self.H_doubleSpinBox.value()
+            self.S_factor=self.S_doubleSpinBox.value()
+            self.source=self.source_lineEdit.text()
+            self.same_for_all = self.same_for_all_checkBox.isChecked()
 
-    def reset(self):
-        self.temp_doubleSpinBox.setValue(298.15)
-        self.pressure_doubleSpinBox.setValue(1)
-        self.source_lineEdit.setText("")
-        self.ZPE_doubleSpinBox.setValue(1)
-        self.H_doubleSpinBox.setValue(1)
-        self.S_doubleSpinBox.setValue(1)
+        def reset(self):
+            self.temp_doubleSpinBox.setValue(298.15)
+            self.pressure_doubleSpinBox.setValue(1)
+            self.source_lineEdit.setText("")
+            self.ZPE_doubleSpinBox.setValue(1)
+            self.H_doubleSpinBox.setValue(1)
+            self.S_doubleSpinBox.setValue(1)
 
 class Thermo_calculation:
-    def __init__(self,input_freq_step:Gaussian_output_step,factor_database = None,
+    def __init__(self,input_freq_step:Gaussian_Output_Step,factor_database = None,
                  manual_specify = False,
                  temp=-1.0,pressure=-1.0,
                  ZPE_factor=1.0, H_factor=1.0, S_factor=1.0, factor_source='Not Scaled'
@@ -119,16 +120,16 @@ class Thermo_calculation:
         if isinstance(input_freq_step,str):
             print("Implicit step in thermo calculation.")
             assert os.path.isfile(input_freq_step), "File not exist."
-            input_freq_step = Gaussian_output(input_freq_step)
+            input_freq_step = Gaussian_Output(input_freq_step)
             pass
 
-        if isinstance(input_freq_step,Gaussian_output):
+        if isinstance(input_freq_step,Gaussian_Output):
             print("Implicit step in thermo calculation.")
             freq_step = [x for x in input_freq_step.steps if x.has_freq and x.normal_termination]
             assert freq_step, "No normal freq step."
             self.freq_step = freq_step[-1]
 
-        if isinstance(input_freq_step,Gaussian_output_step):
+        if isinstance(input_freq_step,Gaussian_Output_Step):
             self.freq_step=input_freq_step
 
 
@@ -170,7 +171,7 @@ class Thermo_calculation:
                     print("Scaling factors: ZPE:",ZPE_factor,' H(0->T):',H_factor," S(T):",S_factor,' Source:',factor_source)
 
 
-                    thermo_factor_dialog = Thermo_Factor_Form(self.freq_step.filename,
+                    thermo_factor_dialog = Thermo_Factor_Form(self.freq_step.original_filename,
                                                               self.freq_step.method,
                                                               self.freq_step.basis,
                                                               scaling_line['Method'][0],
