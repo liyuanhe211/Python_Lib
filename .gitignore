@@ -15,7 +15,7 @@ share/python-wheels/
 
 _*
 \.*
-# `_*` 会误伤包标记文件，豁免之（历史上的 __init__.py 都是 git add -f 强加的）
+# `_*` wrongly matches the package marker files, so exempt them (historically every __init__.py had to be force-added with git add -f)
 !__init__.py
 
 Secret
@@ -29,9 +29,14 @@ Obsolete
 
 Temp
 *[Tt][Ee][Mm][Pp]*
+# Names containing "Template" are not temporary files: re-include them (must stay after the Temp pattern; cannot rescue a path whose parent directory is itself excluded)
+!*[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee]*
 
 TODO
 *[Tt][Oo][Dd][Oo]*
+
+# Test files: not reviewed as strictly as production code and their fixtures may leak private data, so excluded by default (force-add a wrongly matched file with git add -f)
+*[Tt][Ee][Ss][Tt]*
 
 src/Chem_Lib/Executable_*
 src/LLM_Lib/qdrant.exe
@@ -43,15 +48,47 @@ Config.json
 # local RAG only, keep out of the public repo. The Manual_*_README.md pointer files are tracked.
 /src/Chem_Lib/Manual_*_Full.md
 /src/Chem_Lib/Manual_*_README.md
-Chem_Lib_Manuals/
+/Manuals/
 
-# 统一的 Raysync 命令行客户端副本（rayfile-c.exe + 私有 DLL）：镭速的专有
-# 商业软件，不得进入公开仓库。只跟踪其中的来源说明 README.md。
+# The shared copy of the Raysync command-line client (rayfile-c.exe + private DLLs) is Raysync's proprietary
+# commercial software and must not enter the public repository. Only its provenance note README.md is tracked.
 src/HPC_Lib/Raysync_Client/*
 !src/HPC_Lib/Raysync_Client/README.md
 
-# 项目协作规则文档只服务于本机的 Claude 会话，不进入公开仓库
+# The project's collaboration rules document serves only the local Claude sessions and does not enter the public repository
 /CLAUDE.md
 
-# Claude 探索性脚本目录
+# Claude's exploratory script folder (including archived user-provided screenshots)
 _Claude_tmp/
+
+# Runtime data (such as the channel health records of literature-retrieval) is not committed
+_Runtime_Data/
+
+# ==== Missing standard entries added (standard template of Initialize_Project_Gitignore.py) ====
+
+# Python
+*.py[cod]
+venv/
+
+# Lint and test caches
+htmlcov/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# Office lock files and backup / temporary suffixes
+~$*
+*.bak
+*.tmp
+*.swp
+*~
+
+# System files
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
